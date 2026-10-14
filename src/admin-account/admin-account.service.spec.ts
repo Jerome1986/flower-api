@@ -6,9 +6,10 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { AdminAccountService } from './admin-account.service';
-import { PrismaService } from '../prisma/prisma.service';
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard';
+import { PrismaService } from '../prisma/prisma.service';
+import { AdminAccountRepository } from './admin-account.repository';
+import { AdminAccountService } from './admin-account.service';
 
 describe('AdminAccountService', () => {
   const actor = {
@@ -53,7 +54,9 @@ describe('AdminAccountService', () => {
         typeof arg === 'function' ? arg(db) : Promise.all(arg),
       ),
     };
-    service = new AdminAccountService(db as PrismaService);
+    service = new AdminAccountService(
+      new AdminAccountRepository(db as PrismaService),
+    );
   });
   it('门店账号无权查询和创建后台账号', async () => {
     const manager = { ...admin, role: 'STORE_MANAGER' as const };

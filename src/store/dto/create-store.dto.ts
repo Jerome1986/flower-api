@@ -5,10 +5,10 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
-  Matches,
   ValidateIf,
 } from 'class-validator';
 

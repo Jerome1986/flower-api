@@ -7,13 +7,11 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { PrismaService } from '../prisma/prisma.service';
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard';
-import {
-  AdminAccountQueryDto,
-  CreateAdminAccountDto,
-  SaveAdminAccountDto,
-} from './admin-account.dto';
+import { AdminAccountRepository } from './admin-account.repository';
+import { AdminAccountQueryDto } from './dto/admin-account-query.dto';
+import { CreateAdminAccountDto } from './dto/create-admin-account.dto';
+import { SaveAdminAccountDto } from './dto/save-admin-account.dto';
 
 const select = {
   id: true,
@@ -29,8 +27,8 @@ const select = {
 
 @Injectable()
 export class AdminAccountService {
-  // 注入数据库服务，统一维护后台账号。
-  constructor(private readonly prisma: PrismaService) {
+  // 注入数据访问层，统一维护后台账号。
+  constructor(private readonly repo: AdminAccountRepository) {
     // 1. 复用项目数据库连接。
   }
 
@@ -42,11 +40,11 @@ export class AdminAccountService {
   }
 
   // 查询目标账号，响应中不读取密码摘要。
-  private async find(id: number, db: Prisma.TransactionClient = this.prisma) {
+  private async find(id: number, db?: Prisma.TransactionClient) {
     // 1. 检查账号编号并查询当前记录。
     if (!Number.isInteger(id) || id <= 0 || id > 2147483647)
       throw new BadRequestException('请选择有效的后台账号');
-    const item = await db.admin.findUnique({ where: { id }, select });
+    const item = await this.repo.findUniqueAdmin({ where: { id }, select }, db);
     // 2. 对不存在的账号返回明确提示。
     if (!item) throw new NotFoundException('后台账号不存在');
     return item;
@@ -104,7 +102,7 @@ export class AdminAccountService {
     // 1. 串行事务冲突时有限重试，统一转换账号重复错误。
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await this.prisma.$transaction(action, {
+        return await this.repo.transaction(action, {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
       } catch (error) {
@@ -148,9 +146,12 @@ export class AdminAccountService {
       old.status &&
       (role !== 'SUPER_ADMIN' || !status)
     ) {
-      const count = await tx.admin.count({
-        where: { role: 'SUPER_ADMIN', status: true, id: { not: old.id } },
-      });
+      const count = await this.repo.countAdmin(
+        {
+          where: { role: 'SUPER_ADMIN', status: true, id: { not: old.id } },
+        },
+        tx,
+      );
       if (!count)
         throw new BadRequestException('至少需要保留一个启用的超级管理员');
     }
@@ -174,15 +175,15 @@ export class AdminAccountService {
         : {}),
     };
     // 2. 查询分页账号及总数，不返回密码或令牌。
-    const [list, total] = await this.prisma.$transaction([
-      this.prisma.admin.findMany({
+    const [list, total] = await this.repo.transaction([
+      this.repo.findManyAdmin({
         where,
         select,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         orderBy: { id: 'desc' },
       }),
-      this.prisma.admin.count({ where }),
+      this.repo.countAdmin({ where }),
     ]);
     return { list, total, page: query.page, pageSize: query.pageSize };
   }
@@ -205,7 +206,7 @@ export class AdminAccountService {
     return this.write(async (tx) => {
       const actor = await this.actor(admin, tx);
       this.checkRole(actor, dto.role);
-      return tx.admin.create({ data: { ...data, password }, select });
+      return this.repo.createAdmin({ data: { ...data, password }, select }, tx);
     });
   }
 
@@ -220,11 +221,14 @@ export class AdminAccountService {
       // 2. 检查角色权限及账号保护规则，切换为平台角色后清除旧门店绑定。
       this.checkRole(actor, old.role, dto.role);
       await this.protect(old, dto.role, dto.status, actor, tx);
-      return tx.admin.update({
-        where: { id },
-        data: { ...data, storeId: null },
-        select,
-      });
+      return this.repo.updateAdmin(
+        {
+          where: { id },
+          data: { ...data, storeId: null },
+          select,
+        },
+        tx,
+      );
     });
   }
 
@@ -238,7 +242,10 @@ export class AdminAccountService {
       // 2. 校验超级管理员权限与自停用保护，仅更新状态。
       this.checkRole(actor, old.role);
       await this.protect(old, old.role, status, actor, tx);
-      return tx.admin.update({ where: { id }, data: { status }, select });
+      return this.repo.updateAdmin(
+        { where: { id }, data: { status }, select },
+        tx,
+      );
     });
   }
 
@@ -252,7 +259,10 @@ export class AdminAccountService {
       const actor = await this.actor(admin, tx);
       const old = await this.find(id, tx);
       this.checkRole(actor, old.role);
-      return tx.admin.update({ where: { id }, data: { password }, select });
+      return this.repo.updateAdmin(
+        { where: { id }, data: { password }, select },
+        tx,
+      );
     });
   }
 }

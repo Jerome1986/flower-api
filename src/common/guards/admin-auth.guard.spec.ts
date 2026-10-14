@@ -1,6 +1,6 @@
 jest.mock('@nestjs/jwt', () => ({ JwtService: class {} }));
-import { createHash } from 'node:crypto';
 import { UnauthorizedException, type ExecutionContext } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { AdminAuthGuard } from './admin-auth.guard';
 
 describe('AdminAuthGuard account maintenance', () => {

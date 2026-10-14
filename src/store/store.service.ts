@@ -7,14 +7,14 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma, Store } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { randomBytes } from 'node:crypto';
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard';
+import { generateStoreCode } from '../utils/generate-store-code';
+import { CreateStoreDto } from './dto/create-store.dto';
 import { QueryStoreDto } from './dto/query-store.dto';
 import { StoreStatusDto } from './dto/store-status.dto';
-import { CreateStoreDto } from './dto/create-store.dto';
 import { UpdateStoreDto } from './dto/update-store.dto';
-import { generateStoreCode } from '../utils/generate-store-code';
-import { randomBytes } from 'node:crypto';
+import { StoreRepository } from './store.repository';
 
 // 门店查询统一关联店长基本资料，不读取微信标识等无关用户信息。
 const managerInclude = {
@@ -28,7 +28,7 @@ type StoreWithManager = Store & {
 @Injectable()
 export class StoreService {
   // 注入 Prisma 服务，供门店查询及用户身份事务使用。
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly repo: StoreRepository) {}
 
   // 判断当前身份是否为有权维护全部门店的平台管理员。
   private isPlatform(admin: CurrentAdmin) {
@@ -121,16 +121,19 @@ export class StoreService {
   // 在事务中按唯一手机号获取或创建店长用户，并返回用户 ID。
   private async resolveManager(tx: Prisma.TransactionClient, phone: string) {
     // 1. 已有用户仅赋予店长身份，未注册则创建用户并生成邀请码。
-    const user = await tx.user.upsert({
-      where: { phone },
-      create: {
-        phone,
-        role: 'STORE_MANAGER',
-        inviteCode: randomBytes(12).toString('hex'),
+    const user = await this.repo.upsertUser(
+      {
+        where: { phone },
+        create: {
+          phone,
+          role: 'STORE_MANAGER',
+          inviteCode: randomBytes(12).toString('hex'),
+        },
+        update: { role: 'STORE_MANAGER' },
+        select: { id: true, enabled: true },
       },
-      update: { role: 'STORE_MANAGER' },
-      select: { id: true, enabled: true },
-    });
+      tx,
+    );
     // 2. 停用用户禁止设置为店长，抛出异常使本次事务回滚。
     if (!user.enabled)
       throw new ConflictException(
@@ -148,7 +151,7 @@ export class StoreService {
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         // 2. 在可串行化隔离级别下执行传入的完整写入流程。
-        return await this.prisma.$transaction(action, {
+        return await this.repo.transaction(action, {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
       } catch (error) {
@@ -174,18 +177,21 @@ export class StoreService {
       // 3. 按手机号复用或创建用户，并赋予店长身份。
       const managerId = await this.resolveManager(tx, dto.managerPhone);
       // 4. 转换提交字段、生成六位编号，并将门店关联到店长用户。
-      return tx.store.create({
-        data: {
-          ...this.data(dto),
-          code: generateStoreCode(),
-          name: dto.name,
-          address: dto.address,
-          phone: dto.phone,
-          businessHours: dto.businessHours,
-          manager: { connect: { id: managerId } },
+      return this.repo.createStore(
+        {
+          data: {
+            ...this.data(dto),
+            code: generateStoreCode(),
+            name: dto.name,
+            address: dto.address,
+            phone: dto.phone,
+            businessHours: dto.businessHours,
+            manager: { connect: { id: managerId } },
+          },
+          include: managerInclude,
         },
-        include: managerInclude,
-      });
+        tx,
+      );
     });
     // 5. 事务成功后转换接口结构，返回门店及店长信息。
     return this.serialize(store);
@@ -212,15 +218,15 @@ export class StoreService {
         : {}),
     };
     // 3. 在同一查询事务中读取分页记录和总数，按排序值及 ID 排列。
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.store.findMany({
+    const [items, total] = await this.repo.transaction([
+      this.repo.findManyStore({
         where,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
         include: managerInclude,
       }),
-      this.prisma.store.count({ where }),
+      this.repo.countStore({ where }),
     ]);
     // 4. 转换每条门店记录，返回列表、总数和分页信息。
     return {
@@ -243,7 +249,7 @@ export class StoreService {
     )
       throw new ForbiddenException('只能访问本店信息');
     // 3. 按主键读取门店并关联店长展示资料。
-    const store = await this.prisma.store.findUnique({
+    const store = await this.repo.findUniqueStore({
       where: { id },
       include: managerInclude,
     });
@@ -261,10 +267,13 @@ export class StoreService {
     // 2. 将门店更新与新旧店长身份调整放入同一可重试事务。
     const store = await this.write(async (tx) => {
       // 3. 查询门店及原店长 ID，不存在则终止事务。
-      const current = await tx.store.findUnique({
-        where: { id },
-        select: { managerId: true },
-      });
+      const current = await this.repo.findUniqueStore(
+        {
+          where: { id },
+          select: { managerId: true },
+        },
+        tx,
+      );
       if (!current) throw new NotFoundException('门店不存在');
       // 4. 提交店长手机号时解析新店长，未提交时保留原关联。
       const managerId =
@@ -272,27 +281,35 @@ export class StoreService {
           ? await this.resolveManager(tx, dto.managerPhone)
           : current.managerId;
       // 5. 仅更新提交的普通字段，按需连接新店长并读取展示资料。
-      const updated = await tx.store.update({
-        where: { id },
-        data: {
-          ...this.data(dto),
-          ...(dto.managerPhone !== undefined
-            ? { manager: { connect: { id: managerId! } } }
-            : {}),
+      const updated = await this.repo.updateStore(
+        {
+          where: { id },
+          data: {
+            ...this.data(dto),
+            ...(dto.managerPhone !== undefined
+              ? { manager: { connect: { id: managerId! } } }
+              : {}),
+          },
+          include: managerInclude,
         },
-        include: managerInclude,
-      });
+        tx,
+      );
       // 6. 更换店长后检查旧店长是否仍有负责门店，无门店时恢复普通用户身份。
       if (
         current.managerId &&
         current.managerId !== managerId &&
-        (await tx.store.count({ where: { managerId: current.managerId } })) ===
-          0
+        (await this.repo.countStore(
+          { where: { managerId: current.managerId } },
+          tx,
+        )) === 0
       ) {
-        await tx.user.updateMany({
-          where: { id: current.managerId, role: 'STORE_MANAGER' },
-          data: { role: 'CUSTOMER' },
-        });
+        await this.repo.updateManyUser(
+          {
+            where: { id: current.managerId, role: 'STORE_MANAGER' },
+            data: { role: 'CUSTOMER' },
+          },
+          tx,
+        );
       }
       // 7. 返回事务内的更新结果，等待整个事务成功提交。
       return updated;

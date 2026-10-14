@@ -4,9 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { MarketingActivityService } from './marketing-activity.service';
-import { PrismaService } from '../prisma/prisma.service';
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard';
+import { PrismaService } from '../prisma/prisma.service';
+import { MarketingActivityRepository } from './marketing-activity.repository';
+import { MarketingActivityService } from './marketing-activity.service';
 
 describe('MarketingActivityService', () => {
   const admin = { role: 'PLATFORM_ADMIN' } as CurrentAdmin;
@@ -49,7 +50,9 @@ describe('MarketingActivityService', () => {
       },
       $transaction: jest.fn(async (fn) => fn(db)),
     };
-    service = new MarketingActivityService(db as PrismaService);
+    service = new MarketingActivityService(
+      new MarketingActivityRepository(db as PrismaService),
+    );
   });
   it('拒绝门店账号设置活动', async () => {
     await expect(
@@ -92,14 +95,22 @@ describe('MarketingActivityService', () => {
       service.save('NEW_USER', { ...dto, reimbursementPerUnit: 100 }, admin),
     ).rejects.toThrow(BadRequestException);
   });
-  it.each([24, 120, 720])('奖励券有效期 %i 小时可保存并启用两项活动', async (hours) => {
-    template.validityHours = hours;
-    for (const trigger of ['NEW_USER', 'INVITATION'] as const) {
-      const saved = await service.save(trigger, dto, admin);
-      expect(saved.template).toMatchObject({ validityHours: hours, available: true });
-      await expect(service.status(trigger, true, admin)).resolves.toMatchObject({ enabled: true });
-    }
-  });
+  it.each([24, 120, 720])(
+    '奖励券有效期 %i 小时可保存并启用两项活动',
+    async (hours) => {
+      template.validityHours = hours;
+      for (const trigger of ['NEW_USER', 'INVITATION'] as const) {
+        const saved = await service.save(trigger, dto, admin);
+        expect(saved.template).toMatchObject({
+          validityHours: hours,
+          available: true,
+        });
+        await expect(
+          service.status(trigger, true, admin),
+        ).resolves.toMatchObject({ enabled: true });
+      }
+    },
+  );
   it('停用奖励券不能启用活动，但允许保存停用配置', async () => {
     template.enabled = false;
     await expect(service.save('NEW_USER', dto, admin)).rejects.toThrow(

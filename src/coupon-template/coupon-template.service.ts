@@ -6,12 +6,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard';
-import {
-  CouponTemplateQueryDto,
-  SaveCouponTemplateDto,
-} from './coupon-template.dto';
+import { CouponTemplateRepository } from './coupon-template.repository';
+import { CouponTemplateQueryDto } from './dto/coupon-template-query.dto';
+import { SaveCouponTemplateDto } from './dto/save-coupon-template.dto';
 
 const specInclude = {
   product: {
@@ -31,9 +29,9 @@ type ExchangeSpec = Prisma.ProductSpecGetPayload<{
 
 @Injectable()
 export class CouponTemplateService {
-  // 注入数据库服务，统一处理优惠券模板的查询和事务写入。
-  constructor(private readonly prisma: PrismaService) {
-    // 1. 由 Nest 注入 Prisma，复用项目的数据库连接。
+  // 注入数据访问层，统一处理优惠券模板的查询和事务写入。
+  constructor(private readonly repo: CouponTemplateRepository) {
+    // 1. 由 Nest 注入 Repository，统一执行数据库读写。
   }
 
   // 校验当前账号是否具有平台优惠券设置权限。
@@ -82,12 +80,15 @@ export class CouponTemplateService {
   }
 
   // 根据有效模板 ID 查找完整记录，不存在时返回明确错误。
-  private async find(id: number, db: Prisma.TransactionClient = this.prisma) {
+  private async find(id: number, db?: Prisma.TransactionClient) {
     // 1. 拒绝无效 ID，避免数据库参数错误。
     if (!Number.isInteger(id) || id <= 0 || id > 2147483647)
       throw new BadRequestException('请选择有效的优惠券');
     // 2. 查询模板、兑换规格和关联统计，统一处理不存在的记录。
-    const item = await db.couponTemplate.findUnique({ where: { id }, include });
+    const item = await this.repo.findUniqueCouponTemplate(
+      { where: { id }, include },
+      db,
+    );
     if (!item) throw new NotFoundException('优惠券不存在');
     return item;
   }
@@ -135,10 +136,13 @@ export class CouponTemplateService {
     if (dto.cashAmount != null)
       throw new BadRequestException('商品兑换券不需要设置抵扣金额');
     // 4. 新选或启用的兑换规格必须可售；停用模板可保留原来的失效规格。
-    const spec = await db.productSpec.findUnique({
-      where: { id: dto.exchangeSpecId! },
-      include: specInclude,
-    });
+    const spec = await this.repo.findUniqueProductSpec(
+      {
+        where: { id: dto.exchangeSpecId! },
+        include: specInclude,
+      },
+      db,
+    );
     if (!spec) throw new BadRequestException('兑换商品规格不存在');
     const unavailable = !spec.enabled || !spec.product.enabled;
     if (unavailable && (dto.enabled || old?.exchangeSpecId !== spec.id))
@@ -164,15 +168,15 @@ export class CouponTemplateService {
         : {}),
     };
     // 2. 同时读取分页记录和总数，按最近新增顺序展示。
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.couponTemplate.findMany({
+    const [items, total] = await this.repo.transaction([
+      this.repo.findManyCouponTemplate({
         where,
         include,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         orderBy: { id: 'desc' },
       }),
-      this.prisma.couponTemplate.count({ where }),
+      this.repo.countCouponTemplate({ where }),
     ]);
     // 3. 转换金额和关联信息，返回标准分页结构。
     return {
@@ -201,15 +205,15 @@ export class CouponTemplateService {
         : {}),
     };
     // 2. 分页查询规格和总数，避免一次加载整个商品库。
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.productSpec.findMany({
+    const [items, total] = await this.repo.transaction([
+      this.repo.findManyProductSpec({
         where,
         include: specInclude,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         orderBy: [{ productId: 'asc' }, { sortOrder: 'asc' }, { id: 'asc' }],
       }),
-      this.prisma.productSpec.count({ where }),
+      this.repo.countProductSpec({ where }),
     ]);
     // 3. 返回规格和商品名称、单位及售价，供后台选择。
     return {
@@ -233,7 +237,7 @@ export class CouponTemplateService {
   async save(dto: SaveCouponTemplateDto, admin: CurrentAdmin, id?: number) {
     // 1. 校验平台权限，模板与关联规则在同一事务中处理。
     this.authorize(admin);
-    return this.prisma.$transaction(async (tx) => {
+    return this.repo.transaction(async (tx) => {
       // 2. 编辑时读取原模板，检查金额、兑换规格和有效期。
       const old = id === undefined ? null : await this.find(id, tx);
       const rules = await this.rules(dto, old, tx);
@@ -242,9 +246,12 @@ export class CouponTemplateService {
         old &&
         dto.type === 'CASH' &&
         old.type !== dto.type &&
-        (await tx.marketingActivity.count({
-          where: { templateId: old.id, isFlowerGift: true },
-        }))
+        (await this.repo.countMarketingActivity(
+          {
+            where: { templateId: old.id, isFlowerGift: true },
+          },
+          tx,
+        ))
       )
         throw new ConflictException(
           '该优惠券关联了赠花活动，请先调整活动后再修改券类型',
@@ -260,8 +267,11 @@ export class CouponTemplateService {
       };
       const saved =
         id === undefined
-          ? await tx.couponTemplate.create({ data, include })
-          : await tx.couponTemplate.update({ where: { id }, data, include });
+          ? await this.repo.createCouponTemplate({ data, include }, tx)
+          : await this.repo.updateCouponTemplate(
+              { where: { id }, data, include },
+              tx,
+            );
       // 5. 返回更新后的模板及关联统计。
       return this.serialize(saved);
     });
@@ -271,7 +281,7 @@ export class CouponTemplateService {
   async status(id: number, enabled: boolean, admin: CurrentAdmin) {
     // 1. 校验平台权限，在事务内读取原模板。
     this.authorize(admin);
-    return this.prisma.$transaction(async (tx) => {
+    return this.repo.transaction(async (tx) => {
       const old = await this.find(id, tx);
       // 2. 启用前重新校验规则，拒绝启用兑换商品已停售的模板。
       if (enabled)
@@ -293,11 +303,14 @@ export class CouponTemplateService {
         );
       // 3. 仅更新模板启停状态，不变更历史已发券。
       return this.serialize(
-        await tx.couponTemplate.update({
-          where: { id },
-          data: { enabled },
-          include,
-        }),
+        await this.repo.updateCouponTemplate(
+          {
+            where: { id },
+            data: { enabled },
+            include,
+          },
+          tx,
+        ),
       );
     });
   }

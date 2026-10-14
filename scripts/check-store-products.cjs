@@ -1,3 +1,6 @@
+const {
+  StoreProductRepository,
+} = require('../dist/src/store-product/store-product.repository');
 // 真实数据库功能验证：所有测试夹具在一个事务中执行，结束后整体回滚。
 require('dotenv/config');
 require('reflect-metadata');
@@ -34,7 +37,9 @@ async function main() {
             return Reflect.get(target, key);
           },
         });
-        const service = new StoreProductService(proxy);
+        const service = new StoreProductService(
+          new StoreProductRepository(proxy),
+        );
         const user = await tx.user.create({
           data: { phone: marker, inviteCode: marker, role: 'STORE_MANAGER' },
         });

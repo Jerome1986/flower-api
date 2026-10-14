@@ -4,14 +4,16 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { Prisma } from '@prisma/client';
-import { ProductService } from './product.service';
-import { ProductController } from './product.controller';
-import { ProductQueryDto, SaveProductDto } from './product.dto';
-import type { PrismaService } from '../prisma/prisma.service';
 import type { AdminRequest } from '../common/guards/admin-auth.guard';
+import type { PrismaService } from '../prisma/prisma.service';
+import { ProductQueryDto } from './dto/product-query.dto';
+import { SaveProductDto } from './dto/save-product.dto';
+import { ProductController } from './product.controller';
+import { ProductRepository } from './product.repository';
+import { ProductService } from './product.service';
 
 // 此处测试控制器的角色限制，令牌鉴权由现有 Guard 独立负责。
 jest.mock('../common/guards/admin-auth.guard', () => ({
@@ -55,7 +57,9 @@ describe('总商品库', () => {
     orderItem: { count: jest.fn() },
   };
   const prisma = { ...tx, $transaction: jest.fn() };
-  const service = new ProductService(prisma as unknown as PrismaService);
+  const service = new ProductService(
+    new ProductRepository(prisma as unknown as PrismaService),
+  );
   it('分类名称去除首尾空格，拒绝空白分类', async () => {
     await service.saveCategory({
       name: '  玫瑰  ',

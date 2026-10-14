@@ -1,3 +1,6 @@
+const {
+  AdminAccountRepository,
+} = require('../dist/src/admin-account/admin-account.repository');
 // 验证真实数据库账号维护与鉴权，临时账号在同一事务中创建并回滚。
 require('dotenv/config');
 require('reflect-metadata');
@@ -51,7 +54,9 @@ async function main() {
             return Reflect.get(target, key);
           },
         });
-        const service = new AdminAccountService(proxy);
+        const service = new AdminAccountService(
+          new AdminAccountRepository(proxy),
+        );
         const seed = await tx.admin.create({
           data: {
             username: `${marker}-owner`,

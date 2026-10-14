@@ -1,6 +1,6 @@
 jest.mock('@nestjs/jwt', () => ({ JwtService: class {} }));
-import { createHash } from 'node:crypto';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'node:crypto';
 import { AdminService } from './admin.service';
 
 describe('AdminService login', () => {

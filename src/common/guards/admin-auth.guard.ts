@@ -5,10 +5,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { PrismaService } from '../../prisma/prisma.service';
-import type { Request } from 'express';
 import type { adminRole } from '@prisma/client';
+import type { Request } from 'express';
 import { createHash } from 'node:crypto';
+import { PrismaService } from '../../prisma/prisma.service';
 
 export interface CurrentAdmin {
   id: number;

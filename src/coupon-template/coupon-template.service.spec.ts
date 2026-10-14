@@ -9,11 +9,10 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard';
 import type { PrismaService } from '../prisma/prisma.service';
+import { CouponTemplateRepository } from './coupon-template.repository';
 import { CouponTemplateService } from './coupon-template.service';
-import {
-  CouponTemplateQueryDto,
-  SaveCouponTemplateDto,
-} from './coupon-template.dto';
+import { CouponTemplateQueryDto } from './dto/coupon-template-query.dto';
+import { SaveCouponTemplateDto } from './dto/save-coupon-template.dto';
 
 const admin: CurrentAdmin = {
   id: 1,
@@ -73,7 +72,9 @@ describe('优惠券模板设置', () => {
     userCoupon: { update: jest.fn(), updateMany: jest.fn() },
     $transaction: jest.fn(),
   };
-  const service = new CouponTemplateService(db as unknown as PrismaService);
+  const service = new CouponTemplateService(
+    new CouponTemplateRepository(db as unknown as PrismaService),
+  );
   beforeEach(() => {
     jest.resetAllMocks();
     db.$transaction.mockImplementation(async (arg: unknown) =>

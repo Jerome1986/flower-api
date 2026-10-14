@@ -5,9 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ActivityTrigger, Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard';
-import { SaveMarketingActivityDto } from './marketing-activity.dto';
+import { SaveMarketingActivityDto } from './dto/save-marketing-activity.dto';
+import { MarketingActivityRepository } from './marketing-activity.repository';
 
 const include = {
   template: { include: { exchangeSpec: { include: { product: true } } } },
@@ -16,8 +16,8 @@ type Activity = Prisma.MarketingActivityGetPayload<{ include: typeof include }>;
 
 @Injectable()
 export class MarketingActivityService {
-  // 注入数据库连接，维护两项固定活动。
-  constructor(private readonly prisma: PrismaService) {
+  // 注入数据访问层，维护两项固定活动。
+  constructor(private readonly repo: MarketingActivityRepository) {
     // 1. 复用全局数据库连接。
   }
 
@@ -80,10 +80,13 @@ export class MarketingActivityService {
         dto.reimbursementPerUnit > 999999999999)
     )
       throw new BadRequestException('请填写有效的报销单价');
-    const template = await db.couponTemplate.findUnique({
-      where: { id: dto.templateId },
-      include: { exchangeSpec: { include: { product: true } } },
-    });
+    const template = await this.repo.findUniqueCouponTemplate(
+      {
+        where: { id: dto.templateId },
+        include: { exchangeSpec: { include: { product: true } } },
+      },
+      db,
+    );
     if (!template) throw new BadRequestException('请选择有效的奖励优惠券');
     // 3. 赠花必须使用兑换券，有效期沿用所选优惠券设置。
     if (dto.isFlowerGift && template.type !== 'EXCHANGE')
@@ -105,7 +108,7 @@ export class MarketingActivityService {
   async list(admin: CurrentAdmin) {
     // 1. 校验权限并读取活动及奖励券。
     this.authorize(admin);
-    const items = await this.prisma.marketingActivity.findMany({
+    const items = await this.repo.findManyMarketingActivity({
       include,
       orderBy: { id: 'asc' },
     });
@@ -121,7 +124,7 @@ export class MarketingActivityService {
   ) {
     // 1. 校验权限，在事务中校验奖励规则。
     this.authorize(admin);
-    return this.prisma.$transaction(async (tx) => {
+    return this.repo.transaction(async (tx) => {
       await this.rules(dto, tx);
       // 2. 每种触发方式仅保留一项配置，金额按十进制存储。
       const data = {
@@ -134,12 +137,15 @@ export class MarketingActivityService {
             ? null
             : new Prisma.Decimal(dto.reimbursementPerUnit).div(100),
       };
-      const item = await tx.marketingActivity.upsert({
-        where: { trigger },
-        create: { trigger, ...data },
-        update: data,
-        include,
-      });
+      const item = await this.repo.upsertMarketingActivity(
+        {
+          where: { trigger },
+          create: { trigger, ...data },
+          update: data,
+          include,
+        },
+        tx,
+      );
       // 3. 返回最新配置，不回写已发放优惠券快照。
       return this.serialize(item);
     });
@@ -153,11 +159,14 @@ export class MarketingActivityService {
   ) {
     // 1. 校验权限并在事务中读取当前配置。
     this.authorize(admin);
-    return this.prisma.$transaction(async (tx) => {
-      const old = await tx.marketingActivity.findUnique({
-        where: { trigger },
-        include,
-      });
+    return this.repo.transaction(async (tx) => {
+      const old = await this.repo.findUniqueMarketingActivity(
+        {
+          where: { trigger },
+          include,
+        },
+        tx,
+      );
       if (!old) throw new NotFoundException('请先设置活动奖励');
       // 2. 停用始终允许，启用时校验当前规则。
       if (enabled)
@@ -174,11 +183,14 @@ export class MarketingActivityService {
         );
       // 3. 仅更新活动状态，保留历史发券记录。
       return this.serialize(
-        await tx.marketingActivity.update({
-          where: { trigger },
-          data: { enabled },
-          include,
-        }),
+        await this.repo.updateMarketingActivity(
+          {
+            where: { trigger },
+            data: { enabled },
+            include,
+          },
+          tx,
+        ),
       );
     });
   }

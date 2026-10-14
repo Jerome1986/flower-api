@@ -1,23 +1,3 @@
-import {
-  IsBoolean,
-  IsInt,
-  IsOptional,
-  IsString,
-  Max,
-  MaxLength,
-  Min,
-} from 'class-validator';
-
-export class SaveMarketingActivityDto {
-  @IsString() @MaxLength(100) name: string;
-  @IsInt() @Min(1) @Max(2147483647) templateId: number;
-  @IsBoolean() enabled: boolean;
-  @IsBoolean() isFlowerGift: boolean;
-  // 报销单价以整数分提交，未配置时为 null。
-  @IsOptional() @IsInt() @Min(0) @Max(999999999999) reimbursementPerUnit?:
-    number | null;
-}
-
-export class MarketingActivityStatusDto {
-  @IsBoolean() enabled: boolean;
-}
+// 兼容原有导入路径，具体实现按职责分层。
+export * from './dto/marketing-activity-status.dto';
+export * from './dto/save-marketing-activity.dto';

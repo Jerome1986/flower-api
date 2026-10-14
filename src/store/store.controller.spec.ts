@@ -1,16 +1,17 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { Test } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
+import { Test } from '@nestjs/testing';
 import { Prisma } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import request from 'supertest';
-import { StoreController } from './store.controller';
-import { StoreService } from './store.service';
-import { PrismaService } from '../prisma/prisma.service';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
 import { ResponseInterceptor } from '../common/interceptors/response.interceptor';
+import { PrismaService } from '../prisma/prisma.service';
 import * as storeCode from '../utils/generate-store-code';
-import { createHash } from 'node:crypto';
+import { StoreController } from './store.controller';
+import { StoreRepository } from './store.repository';
+import { StoreService } from './store.service';
 
 jest.mock('@nestjs/jwt', () => ({ JwtService: jest.fn() }));
 jest.mock('../prisma/prisma.service', () => ({ PrismaService: jest.fn() }));
@@ -66,6 +67,7 @@ describe('门店接口（隔离数据库 HTTP 验证）', () => {
       controllers: [StoreController],
       providers: [
         StoreService,
+        StoreRepository,
         AdminAuthGuard,
         { provide: PrismaService, useValue: prisma },
         { provide: JwtService, useValue: jwt },
@@ -92,7 +94,9 @@ describe('门店接口（隔离数据库 HTTP 验证）', () => {
     jwt.verifyAsync.mockImplementation(async (token: string) => {
       if (token === 'expired') throw new Error('expired');
       return {
-        passwordVersion: createHash('sha256').update('test-password-hash').digest('hex'),
+        passwordVersion: createHash('sha256')
+          .update('test-password-hash')
+          .digest('hex'),
         type: ['customer', 'manager'].includes(token) ? 'user' : 'admin',
         userId:
           token === 'manager'

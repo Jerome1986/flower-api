@@ -6,15 +6,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard';
-import {
-  AdjustStockDto,
-  CatalogQueryDto,
-  SelectStoreProductDto,
-  StoreProductQueryDto,
-  StoreProductSettingsDto,
-} from './store-product.dto';
+import { AdjustStockDto } from './dto/adjust-stock.dto';
+import { CatalogQueryDto } from './dto/catalog-query.dto';
+import { SelectStoreProductDto } from './dto/select-store-product.dto';
+import { StoreProductQueryDto } from './dto/store-product-query.dto';
+import { StoreProductSettingsDto } from './dto/store-product-settings.dto';
+import { StoreProductRepository } from './store-product.repository';
 
 const include = {
   store: { select: { id: true, name: true, enabled: true } },
@@ -34,8 +32,10 @@ type SelectedProduct = Prisma.StoreProductGetPayload<{
 
 @Injectable()
 export class StoreProductService {
-  constructor(private readonly prisma: PrismaService) {}
+  // 注入门店商品数据访问层及业务依赖。
+  constructor(private readonly repo: StoreProductRepository) {}
 
+  // 根据账号身份限定门店商品查询范围。
   private scope(admin: CurrentAdmin): Prisma.StoreWhereInput {
     if (admin.role === 'SUPER_ADMIN' || admin.role === 'PLATFORM_ADMIN')
       return {};
@@ -46,34 +46,43 @@ export class StoreProductService {
     throw new ForbiddenException('无门店商品管理权限');
   }
 
+  // 查询可用门店详情。
   private async store(
     storeId: number,
     admin: CurrentAdmin,
-    db: Prisma.TransactionClient = this.prisma,
+    db?: Prisma.TransactionClient,
   ) {
-    const store = await db.store.findFirst({
-      where: { AND: [{ id: storeId }, this.scope(admin)] },
-      select: { id: true, name: true, enabled: true },
-    });
+    const store = await this.repo.findFirstStore(
+      {
+        where: { AND: [{ id: storeId }, this.scope(admin)] },
+        select: { id: true, name: true, enabled: true },
+      },
+      db,
+    );
     if (!store) throw new NotFoundException('门店不存在或无访问权限');
     return store;
   }
 
+  // 按商品 ID 和管理员可见门店范围查询上架记录。
   private async selected(
     id: number,
     admin: CurrentAdmin,
-    db: Prisma.TransactionClient = this.prisma,
+    db?: Prisma.TransactionClient,
   ) {
     if (!Number.isInteger(id) || id <= 0 || id > 2147483647)
       throw new BadRequestException('请选择有效的门店商品');
-    const item = await db.storeProduct.findFirst({
-      where: { id, store: this.scope(admin) },
-      include,
-    });
+    const item = await this.repo.findFirstStoreProduct(
+      {
+        where: { id, store: this.scope(admin), product: { type: 'ORDINARY' } },
+        include,
+      },
+      db,
+    );
     if (!item) throw new NotFoundException('门店商品不存在或无访问权限');
     return item;
   }
 
+  // 整理门店商品响应字段。
   private serialize(item: SelectedProduct) {
     return {
       id: item.id,
@@ -112,7 +121,7 @@ export class StoreProductService {
 
   // 按平台、店长或旧门店账号的权限返回可管理门店。
   stores(admin: CurrentAdmin) {
-    return this.prisma.store.findMany({
+    return this.repo.findManyStore({
       where: this.scope(admin),
       select: { id: true, name: true, enabled: true },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
@@ -128,18 +137,23 @@ export class StoreProductService {
       storeId: query.storeId,
       enabled: query.enabled,
       ...(query.keyword?.trim()
-        ? { product: { name: { contains: query.keyword.trim() } } }
-        : {}),
+        ? {
+            product: {
+              type: 'ORDINARY',
+              name: { contains: query.keyword.trim() },
+            },
+          }
+        : { product: { type: 'ORDINARY' } }),
     };
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.storeProduct.findMany({
+    const [items, total] = await this.repo.transaction([
+      this.repo.findManyStoreProduct({
         where,
         include,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         orderBy: { id: 'desc' },
       }),
-      this.prisma.storeProduct.count({ where }),
+      this.repo.countStoreProduct({ where }),
     ]);
     return {
       list: items.map((item) => this.serialize(item)),
@@ -154,14 +168,15 @@ export class StoreProductService {
     if (!query.storeId) throw new BadRequestException('请选择门店');
     await this.store(query.storeId, admin);
     const where: Prisma.ProductWhereInput = {
+      type: 'ORDINARY',
       enabled: true,
       specs: { some: { enabled: true } },
       ...(query.keyword?.trim()
         ? { name: { contains: query.keyword.trim() } }
         : {}),
     };
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.product.findMany({
+    const [items, total] = await this.repo.transaction([
+      this.repo.findManyProduct({
         where,
         include: {
           category: true,
@@ -178,7 +193,7 @@ export class StoreProductService {
         take: query.pageSize,
         orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
       }),
-      this.prisma.product.count({ where }),
+      this.repo.countProduct({ where }),
     ]);
     return {
       list: items.map((item) => ({
@@ -207,6 +222,7 @@ export class StoreProductService {
     return this.serialize(await this.selected(id, admin));
   }
 
+  // 检查上架商品是否至少支持一种收花方式。
   private validateSettings(dto: StoreProductSettingsDto) {
     if (dto.enabled && !dto.pickupEnabled && !dto.deliveryEnabled)
       throw new BadRequestException('上架商品请至少选择一种取货方式');
@@ -216,32 +232,45 @@ export class StoreProductService {
   async create(dto: SelectStoreProductDto, admin: CurrentAdmin) {
     this.validateSettings(dto);
     try {
-      const item = await this.prisma.$transaction(async (tx) => {
+      const item = await this.repo.transaction(async (tx) => {
         const store = await this.store(dto.storeId, admin, tx);
         if (!store.enabled)
           throw new BadRequestException('门店已停用，不能添加商品');
-        const product = await tx.product.findUnique({
-          where: { id: dto.productId },
-          include: { specs: { where: { enabled: true } } },
-        });
-        if (!product?.enabled || !product.specs.length)
-          throw new BadRequestException('请选择已上架且有可用规格的商品');
-        const selected = await tx.storeProduct.create({
-          data: {
-            storeId: dto.storeId,
-            productId: dto.productId,
-            enabled: dto.enabled,
-            pickupEnabled: dto.pickupEnabled,
-            deliveryEnabled: dto.deliveryEnabled,
+        const product = await this.repo.findUniqueProduct(
+          {
+            where: { id: dto.productId },
+            include: { specs: { where: { enabled: true } } },
           },
-        });
-        await tx.storeStock.createMany({
-          data: product.specs.map((spec) => ({
-            storeProductId: selected.id,
-            productId: product.id,
-            specId: spec.id,
-          })),
-        });
+          tx,
+        );
+        if (
+          !product?.enabled ||
+          product.type !== 'ORDINARY' ||
+          !product.specs.length
+        )
+          throw new BadRequestException('请选择已上架且有可用规格的商品');
+        const selected = await this.repo.createStoreProduct(
+          {
+            data: {
+              storeId: dto.storeId,
+              productId: dto.productId,
+              enabled: dto.enabled,
+              pickupEnabled: dto.pickupEnabled,
+              deliveryEnabled: dto.deliveryEnabled,
+            },
+          },
+          tx,
+        );
+        await this.repo.createManyStoreStock(
+          {
+            data: product.specs.map((spec) => ({
+              storeProductId: selected.id,
+              productId: product.id,
+              specId: spec.id,
+            })),
+          },
+          tx,
+        );
         return this.selected(selected.id, admin, tx);
       });
       return this.serialize(item);
@@ -258,7 +287,7 @@ export class StoreProductService {
   // 校验商品可售状态和取货方式后保存本店上下架设置。
   async update(id: number, dto: StoreProductSettingsDto, admin: CurrentAdmin) {
     this.validateSettings(dto);
-    return this.prisma.$transaction(async (tx) => {
+    return this.repo.transaction(async (tx) => {
       const old = await this.selected(id, admin, tx);
       if (
         dto.enabled &&
@@ -270,7 +299,10 @@ export class StoreProductService {
           '门店或商品已停用，或没有可用规格，暂不能上架',
         );
       return this.serialize(
-        await tx.storeProduct.update({ where: { id }, data: dto, include }),
+        await this.repo.updateStoreProduct(
+          { where: { id }, data: dto, include },
+          tx,
+        ),
       );
     });
   }
@@ -297,51 +329,66 @@ export class StoreProductService {
       log.availableAfter === dto.available &&
       log.reason === reason;
     try {
-      await this.prisma.$transaction(async (tx) => {
+      await this.repo.transaction(async (tx) => {
         const item = await this.selected(id, admin, tx);
         if (!item.product.specs.some((spec) => spec.id === specId))
           throw new BadRequestException('规格不属于当前商品');
-        const prior = await tx.inventoryLog.findUnique({
-          where: { operationKey },
-          include: { stock: true },
-        });
+        const prior = await this.repo.findUniqueInventoryLog(
+          {
+            where: { operationKey },
+            include: { stock: true },
+          },
+          tx,
+        );
         if (prior) {
           if (!matches(prior))
             throw new ConflictException('本次调整已提交，请刷新后重新操作');
           return;
         }
         // 商品库后续新增的规格在第一次调整时补建库存，不更改已有库存。
-        await tx.storeStock.createMany({
-          data: [{ storeProductId: id, productId: item.productId, specId }],
-          skipDuplicates: true,
-        });
-        const stock = await tx.storeStock.findUniqueOrThrow({
-          where: { storeProductId_specId: { storeProductId: id, specId } },
-        });
-        const updated = await tx.storeStock.updateMany({
-          where: {
-            id: stock.id,
-            version: dto.version,
-            available: stock.available,
-            reserved: stock.reserved,
+        await this.repo.createManyStoreStock(
+          {
+            data: [{ storeProductId: id, productId: item.productId, specId }],
+            skipDuplicates: true,
           },
-          data: { available: dto.available, version: { increment: 1 } },
-        });
+          tx,
+        );
+        const stock = await this.repo.findUniqueOrThrowStoreStock(
+          {
+            where: { storeProductId_specId: { storeProductId: id, specId } },
+          },
+          tx,
+        );
+        const updated = await this.repo.updateManyStoreStock(
+          {
+            where: {
+              id: stock.id,
+              version: dto.version,
+              available: stock.available,
+              reserved: stock.reserved,
+            },
+            data: { available: dto.available, version: { increment: 1 } },
+          },
+          tx,
+        );
         if (updated.count !== 1)
           throw new ConflictException('库存已发生变化，请刷新后重新调整');
-        await tx.inventoryLog.create({
-          data: {
-            stockId: stock.id,
-            type: 'STOCKTAKE',
-            availableBefore: stock.available,
-            availableAfter: dto.available,
-            reservedBefore: stock.reserved,
-            reservedAfter: stock.reserved,
-            reason,
-            adminId: admin.role === 'STORE_MANAGER' ? null : admin.id,
-            operationKey,
+        await this.repo.createInventoryLog(
+          {
+            data: {
+              stockId: stock.id,
+              type: 'STOCKTAKE',
+              availableBefore: stock.available,
+              availableAfter: dto.available,
+              reservedBefore: stock.reserved,
+              reservedAfter: stock.reserved,
+              reason,
+              adminId: admin.role === 'STORE_MANAGER' ? null : admin.id,
+              operationKey,
+            },
           },
-        });
+          tx,
+        );
       });
     } catch (error) {
       if (
@@ -350,7 +397,7 @@ export class StoreProductService {
       )
         throw error;
       // 并发重复提交时唯一键回滚整个事务，确认原操作一致后返回最新库存。
-      const prior = await this.prisma.inventoryLog.findUnique({
+      const prior = await this.repo.findUniqueInventoryLog({
         where: { operationKey },
         include: { stock: true },
       });
@@ -366,8 +413,8 @@ export class StoreProductService {
     const where: Prisma.InventoryLogWhereInput = {
       stock: { storeProductId: id },
     };
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.inventoryLog.findMany({
+    const [items, total] = await this.repo.transaction([
+      this.repo.findManyInventoryLog({
         where,
         include: {
           stock: { select: { spec: { select: { name: true, unit: true } } } },
@@ -377,7 +424,7 @@ export class StoreProductService {
         take: query.pageSize,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
-      this.prisma.inventoryLog.count({ where }),
+      this.repo.countInventoryLog({ where }),
     ]);
     return {
       list: items.map((log) => ({

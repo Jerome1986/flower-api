@@ -5,13 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import {
-  ProductQueryDto,
-  SaveProductDto,
-  SaveProductCategoryDto,
-} from './product.dto';
 import { randomUUID } from 'node:crypto';
+import { ProductQueryDto } from './dto/product-query.dto';
+import { SaveProductCategoryDto } from './dto/save-product-category.dto';
+import { SaveProductDto } from './dto/save-product.dto';
+import { ProductRepository } from './product.repository';
 
 const include = {
   category: true,
@@ -21,8 +19,10 @@ type ProductDetail = Prisma.ProductGetPayload<{ include: typeof include }>;
 
 @Injectable()
 export class ProductService {
-  constructor(private readonly prisma: PrismaService) {}
+  // 注入商品数据访问层及业务依赖。
+  constructor(private readonly repo: ProductRepository) {}
 
+  // 整理商品响应字段。
   private serialize(product: ProductDetail) {
     const { code: _code, ...fields } = product;
     return {
@@ -34,19 +34,21 @@ export class ProductService {
     };
   }
 
+  // 查询商品分类列表。
   categories() {
-    return this.prisma.productCategory.findMany({
+    return this.repo.findManyProductCategory({
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     });
   }
 
+  // 校验并保存商品分类。
   async saveCategory(dto: SaveProductCategoryDto, id?: number) {
     const data = { ...dto, name: dto.name.trim() };
     if (!data.name) throw new BadRequestException('分类名称不能为空');
     try {
       return id === undefined
-        ? await this.prisma.productCategory.create({ data })
-        : await this.prisma.productCategory.update({ where: { id }, data });
+        ? await this.repo.createProductCategory({ data })
+        : await this.repo.updateProductCategory({ where: { id }, data });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError) {
         if (error.code === 'P2002')
@@ -58,10 +60,12 @@ export class ProductService {
     }
   }
 
+  // 查询商品列表。
   async list(query: ProductQueryDto) {
     const keyword = query.keyword?.trim();
     const where: Prisma.ProductWhereInput = {
       enabled: query.enabled,
+      type: query.type,
       categoryId: query.categoryId,
       ...(keyword
         ? {
@@ -69,15 +73,15 @@ export class ProductService {
           }
         : {}),
     };
-    const [list, total] = await this.prisma.$transaction([
-      this.prisma.product.findMany({
+    const [list, total] = await this.repo.transaction([
+      this.repo.findManyProduct({
         where,
         include,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
       }),
-      this.prisma.product.count({ where }),
+      this.repo.countProduct({ where }),
     ]);
     return {
       list: list.map((item) => this.serialize(item)),
@@ -87,8 +91,9 @@ export class ProductService {
     };
   }
 
+  // 查询商品详情。
   async detail(id: number) {
-    const product = await this.prisma.product.findUnique({
+    const product = await this.repo.findUniqueProduct({
       where: { id },
       include,
     });
@@ -96,6 +101,7 @@ export class ProductService {
     return this.serialize(product);
   }
 
+  // 保存商品。
   async save(dto: SaveProductDto, id?: number) {
     if (!dto.name.trim() || !dto.coverImage.trim())
       throw new BadRequestException('商品名称和封面不能为空');
@@ -111,25 +117,33 @@ export class ProductService {
     )
       throw new BadRequestException('规格名称、单位不能为空，规格不能重复');
     try {
-      const product = await this.prisma.$transaction(async (tx) => {
+      const product = await this.repo.transaction(async (tx) => {
         const old =
           id === undefined
             ? null
-            : await tx.product.findUnique({
-                where: { id },
-                include: {
-                  specs: true,
+            : await this.repo.findUniqueProduct(
+                {
+                  where: { id },
+                  include: {
+                    specs: true,
+                  },
                 },
-              });
+                tx,
+              );
         if (id !== undefined && !old) throw new NotFoundException('商品不存在');
+        if (old && dto.type && old.type !== dto.type)
+          throw new BadRequestException('商品类型创建后不能修改，请新建商品');
         if (
           ids.some((specId) => !old?.specs.some((spec) => spec.id === specId))
         )
           throw new BadRequestException('规格不属于当前商品');
         if (dto.categoryId) {
-          const category = await tx.productCategory.findUnique({
-            where: { id: dto.categoryId },
-          });
+          const category = await this.repo.findUniqueProductCategory(
+            {
+              where: { id: dto.categoryId },
+            },
+            tx,
+          );
           if (!category) throw new BadRequestException('商品分类不存在');
           if (!category.enabled && old?.categoryId !== dto.categoryId)
             throw new BadRequestException('不能选择已停用的商品分类');
@@ -143,24 +157,33 @@ export class ProductService {
         const saved =
           id === undefined
             ? // 兼容现有数据库非空唯一列，仅内部自动生成，不作为业务字段开放。
-              await tx.product.create({ data: { ...data, code: randomUUID() } })
-            : await tx.product.update({ where: { id }, data });
+              await this.repo.createProduct(
+                { data: { ...data, code: randomUUID() } },
+                tx,
+              )
+            : await this.repo.updateProduct({ where: { id }, data }, tx);
         // 先临时改名，支持交换规格名称；历史规格只停用，不删除引用记录。
         for (const spec of old?.specs ?? []) {
-          await tx.productSpec.update({
-            where: { id: spec.id },
-            data: { name: `__reserved_${randomUUID()}`, enabled: false },
-          });
+          await this.repo.updateProductSpec(
+            {
+              where: { id: spec.id },
+              data: { name: `__reserved_${randomUUID()}`, enabled: false },
+            },
+            tx,
+          );
         }
         const finalNames = new Set(names);
         for (const spec of old?.specs ?? []) {
           if (ids.includes(spec.id)) continue;
           if (finalNames.has(spec.name))
             throw new ConflictException('请编辑原规格，不能删除后新增同名规格');
-          await tx.productSpec.update({
-            where: { id: spec.id },
-            data: { name: spec.name },
-          });
+          await this.repo.updateProductSpec(
+            {
+              where: { id: spec.id },
+              data: { name: spec.name },
+            },
+            tx,
+          );
         }
         for (const spec of specs) {
           const { id: specId, ...fields } = spec;
@@ -172,19 +195,28 @@ export class ProductService {
             price: new Prisma.Decimal(spec.price).div(100),
           };
           if (specId)
-            await tx.productSpec.update({
-              where: { id: specId },
-              data: specData,
-            });
+            await this.repo.updateProductSpec(
+              {
+                where: { id: specId },
+                data: specData,
+              },
+              tx,
+            );
           else
-            await tx.productSpec.create({
-              data: { ...specData, productId: saved.id },
-            });
+            await this.repo.createProductSpec(
+              {
+                data: { ...specData, productId: saved.id },
+              },
+              tx,
+            );
         }
-        return tx.product.findUniqueOrThrow({
-          where: { id: saved.id },
-          include,
-        });
+        return this.repo.findUniqueOrThrowProduct(
+          {
+            where: { id: saved.id },
+            include,
+          },
+          tx,
+        );
       });
       return this.serialize(product);
     } catch (error) {
@@ -197,10 +229,11 @@ export class ProductService {
     }
   }
 
+  // 设置商品启用状态。
   async status(id: number, enabled: boolean) {
     await this.detail(id);
     return this.serialize(
-      await this.prisma.product.update({
+      await this.repo.updateProduct({
         where: { id },
         data: { enabled },
         include,

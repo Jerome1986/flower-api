@@ -1,3 +1,6 @@
+const {
+  CouponTemplateRepository,
+} = require('../dist/src/coupon-template/coupon-template.repository');
 // 真实数据库验证优惠券设置，所有临时记录在同一事务中创建并最终回滚。
 require('dotenv/config');
 require('reflect-metadata');
@@ -37,7 +40,9 @@ async function main() {
             return Reflect.get(target, key);
           },
         });
-        const service = new CouponTemplateService(proxy);
+        const service = new CouponTemplateService(
+          new CouponTemplateRepository(proxy),
+        );
         const admin = {
           id: 1,
           role: 'PLATFORM_ADMIN',

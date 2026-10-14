@@ -262,6 +262,8 @@ model ProductCategory {
 /// 商品按分类维护；已有业务记录的商品停用，不物理删除。
 // 商品表：保存统一商品库的基础信息
 model Product {
+  /// 普通门店商品或平台成品花束，创建后不可切换。
+  type          OrderType        @default(ORDINARY)
   /// 主键 ID
   id            Int              @id @default(autoincrement())
   /// 业务编号
