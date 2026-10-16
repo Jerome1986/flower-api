@@ -1,5 +1,5 @@
-import { adminRole } from '@prisma/client';
-import { Transform, Type } from 'class-transformer';
+import { adminRole } from '@prisma/client'
+import { Transform, Type } from 'class-transformer'
 import {
   IsBoolean,
   IsEnum,
@@ -9,34 +9,34 @@ import {
   Max,
   MaxLength,
   Min,
-} from 'class-validator';
+} from 'class-validator'
 
 export class AdminAccountQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(1000000)
-  page = 1;
+  page = 1
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(100)
-  pageSize = 10;
+  pageSize = 10
 
   @IsOptional()
   @IsString()
   @MaxLength(64)
-  keyword?: string;
+  keyword?: string
 
   @IsOptional()
   @IsEnum(adminRole)
-  role?: adminRole;
+  role?: adminRole
 
   @IsOptional()
   @Transform(({ value }: { value: unknown }) =>
     value === 'true' ? true : value === 'false' ? false : value,
   )
   @IsBoolean()
-  status?: boolean;
+  status?: boolean
 }

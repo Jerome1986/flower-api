@@ -1,6 +1,6 @@
-import { IsBoolean } from 'class-validator';
+import { IsBoolean } from 'class-validator'
 
 export class AdminAccountStatusDto {
   @IsBoolean()
-  status: boolean;
+  status: boolean
 }

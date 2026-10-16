@@ -1,18 +1,18 @@
-import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer'
+import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator'
 
 export class CustomOrderQuery {
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(1000000)
-  page = 1;
+  page = 1
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(100)
-  pageSize = 20;
+  pageSize = 20
 
   @IsOptional()
   @IsIn([
@@ -29,5 +29,5 @@ export class CustomOrderQuery {
     | 'DELIVERING'
     | 'COMPLETED'
     | 'CANCELLED'
-    | 'CLOSED';
+    | 'CLOSED'
 }

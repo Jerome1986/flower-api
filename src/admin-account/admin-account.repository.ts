@@ -1,59 +1,84 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { Injectable } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import { PrismaService } from '../prisma/prisma.service'
+import { AdminAccountQueryDto } from './dto/admin-account-query.dto'
+export const select = {
+  id: true,
+  username: true,
+  displayName: true,
+  role: true,
+  storeId: true,
+  status: true,
+  lastLoginAt: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.AdminSelect
 
 @Injectable()
 export class AdminAccountRepository {
-  // 注入数据库连接，集中管理本模块的数据读写。
+  // 注入数据库连接，集中处理管理员账号数据读写。
   constructor(private readonly prisma: PrismaService) {}
 
-  // 复用 Prisma 事务重载，保留数组事务的延迟执行和交互事务的隔离级别。
-  get transaction(): PrismaService['$transaction'] {
-    return this.prisma.$transaction.bind(this.prisma);
+  // 按 ID 查询管理员账号及展示所需关联信息。
+  findById(id: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.admin.findUnique({ where: { id }, select })
   }
 
-  // 按唯一条件查询管理员。
-  findUniqueAdmin<T extends Prisma.AdminFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.AdminFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.admin.findUnique(args);
+  // 统计当前账号以外仍启用的超级管理员。
+  countOtherSuperAdmins(id: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.admin.count({
+      where: { role: 'SUPER_ADMIN', status: true, id: { not: id } },
+    })
   }
 
-  // 统计管理员。
-  countAdmin<T extends Prisma.AdminCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.AdminCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 创建管理员账号并返回展示字段。
+  createAdmin(
+    data: Prisma.AdminUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.admin.count(args);
+    const db = tx ?? this.prisma
+    return db.admin.create({ data, select })
   }
 
-  // 查询符合条件的管理员。
-  findManyAdmin<T extends Prisma.AdminFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.AdminFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 更新管理员账号并返回展示字段。
+  updateAdmin(
+    id: number,
+    data: Prisma.AdminUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.admin.findMany(args);
+    const db = tx ?? this.prisma
+    return db.admin.update({
+      where: { id },
+      data,
+      select,
+    })
   }
-
-  // 新增管理员。
-  createAdmin<T extends Prisma.AdminCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.AdminCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.admin.create(args);
-  }
-
-  // 更新管理员。
-  updateAdmin<T extends Prisma.AdminUpdateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.AdminUpdateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.admin.update(args);
+  // 在传入事务中按筛选条件分页查询管理员账号及总数。
+  async findPage(query: AdminAccountQueryDto, tx: Prisma.TransactionClient) {
+    const keyword = query.keyword?.trim()
+    const where: Prisma.AdminWhereInput = {
+      role: query.role,
+      status: query.status,
+      ...(keyword
+        ? {
+            OR: [
+              { username: { contains: keyword } },
+              { displayName: { contains: keyword } },
+            ],
+          }
+        : {}),
+    }
+    return [
+      await tx.admin.findMany({
+        where,
+        select,
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: { id: 'desc' },
+      }),
+      await tx.admin.count({ where }),
+    ] as const
   }
 }

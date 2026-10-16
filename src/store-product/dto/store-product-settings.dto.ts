@@ -1,12 +1,12 @@
-import { IsBoolean } from 'class-validator';
+import { IsBoolean } from 'class-validator'
 
 export class StoreProductSettingsDto {
   @IsBoolean()
-  enabled: boolean;
+  enabled: boolean
 
   @IsBoolean()
-  pickupEnabled: boolean;
+  pickupEnabled: boolean
 
   @IsBoolean()
-  deliveryEnabled: boolean;
+  deliveryEnabled: boolean
 }

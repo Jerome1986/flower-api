@@ -8,13 +8,13 @@ import {
   Put,
   Req,
   UseGuards,
-} from '@nestjs/common';
-import { ActivityTrigger } from '@prisma/client';
-import type { AdminRequest } from '../common/guards/admin-auth.guard';
-import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
-import { MarketingActivityStatusDto } from './dto/marketing-activity-status.dto';
-import { SaveMarketingActivityDto } from './dto/save-marketing-activity.dto';
-import { MarketingActivityService } from './marketing-activity.service';
+} from '@nestjs/common'
+import { ActivityTrigger } from '@prisma/client'
+import type { AdminRequest } from '../common/guards/admin-auth.guard'
+import { AdminAuthGuard } from '../common/guards/admin-auth.guard'
+import { MarketingActivityStatusDto } from './dto/marketing-activity-status.dto'
+import { SaveMarketingActivityDto } from './dto/save-marketing-activity.dto'
+import { MarketingActivityService } from './marketing-activity.service'
 
 @Controller('admin/marketing-activities')
 @UseGuards(AdminAuthGuard)
@@ -25,7 +25,7 @@ export class MarketingActivityController {
   // 查询两项活动的当前配置。
   @Get()
   list(@Req() request: AdminRequest) {
-    return this.service.list(request.admin);
+    return this.service.list(request.admin)
   }
 
   // 新增或编辑指定活动的奖励及赠花配置。
@@ -36,7 +36,7 @@ export class MarketingActivityController {
     @Body() dto: SaveMarketingActivityDto,
     @Req() request: AdminRequest,
   ) {
-    return this.service.save(trigger, dto, request.admin);
+    return this.service.save(trigger, dto, request.admin)
   }
 
   // 启用或停用指定活动。
@@ -47,6 +47,6 @@ export class MarketingActivityController {
     @Body() dto: MarketingActivityStatusDto,
     @Req() request: AdminRequest,
   ) {
-    return this.service.status(trigger, dto.enabled, request.admin);
+    return this.service.status(trigger, dto.enabled, request.admin)
   }
 }

@@ -37,9 +37,7 @@ async function main() {
             return Reflect.get(target, key);
           },
         });
-        const service = new StoreProductService(
-          new StoreProductRepository(proxy),
-        );
+        const service = new StoreProductService(new StoreProductRepository(proxy), proxy);
         const user = await tx.user.create({
           data: { phone: marker, inviteCode: marker, role: 'STORE_MANAGER' },
         });

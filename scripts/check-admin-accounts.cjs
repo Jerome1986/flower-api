@@ -54,9 +54,7 @@ async function main() {
             return Reflect.get(target, key);
           },
         });
-        const service = new AdminAccountService(
-          new AdminAccountRepository(proxy),
-        );
+        const service = new AdminAccountService(new AdminAccountRepository(proxy), proxy);
         const seed = await tx.admin.create({
           data: {
             username: `${marker}-owner`,

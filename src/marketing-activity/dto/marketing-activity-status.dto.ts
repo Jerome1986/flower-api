@@ -1,6 +1,6 @@
-import { IsBoolean } from 'class-validator';
+import { IsBoolean } from 'class-validator'
 
 export class MarketingActivityStatusDto {
   @IsBoolean()
-  enabled: boolean;
+  enabled: boolean
 }

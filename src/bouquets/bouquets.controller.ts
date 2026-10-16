@@ -10,19 +10,19 @@ import {
   Query,
   Req,
   UseGuards,
-} from '@nestjs/common';
+} from '@nestjs/common'
 import {
   AdminAuthGuard,
   type AdminRequest,
-} from '../common/guards/admin-auth.guard';
-import { UserAuthGuard } from '../user-auth/user-auth.guard';
-import { type UserRequest } from '../user-auth/user-auth.types';
-import { BouquetsService } from './bouquets.service';
-import { BouquetSettingsDto } from './dto/bouquet-settings.dto';
-import { CreateBouquetOrderDto } from './dto/create-bouquet-order.dto';
-import { CustomOrderAction } from './dto/custom-order-action.dto';
-import { CustomOrderQuery } from './dto/custom-order-query.dto';
-import { QuoteBouquetDto } from './dto/quote-bouquet.dto';
+} from '../common/guards/admin-auth.guard'
+import { UserAuthGuard } from '../user-auth/user-auth.guard'
+import { type UserRequest } from '../user-auth/user-auth.types'
+import { BouquetsService } from './bouquets.service'
+import { BouquetSettingsDto } from './dto/bouquet-settings.dto'
+import { CreateBouquetOrderDto } from './dto/create-bouquet-order.dto'
+import { CustomOrderAction } from './dto/custom-order-action.dto'
+import { CustomOrderQuery } from './dto/custom-order-query.dto'
+import { QuoteBouquetDto } from './dto/quote-bouquet.dto'
 
 @Controller('shop/bouquets')
 export class BouquetsController {
@@ -32,13 +32,13 @@ export class BouquetsController {
   // 查询定制花束列表。
   @Get()
   list() {
-    return this.service.list();
+    return this.service.list()
   }
 
   // 查询定制花束详情。
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {
-    return this.service.detail(id);
+    return this.service.detail(id)
   }
 }
 @Controller('user/custom-orders')
@@ -51,13 +51,13 @@ export class CustomOrdersController {
   @Post('quote')
   @HttpCode(200)
   quote(@Req() req: UserRequest, @Body() dto: QuoteBouquetDto) {
-    return this.service.quote(req.userId, dto);
+    return this.service.quote(req.userId, dto)
   }
 
   // 提交定制订单。
   @Post()
   create(@Req() req: UserRequest, @Body() dto: CreateBouquetOrderDto) {
-    return this.service.create(req.userId, dto);
+    return this.service.create(req.userId, dto)
   }
 }
 @Controller('admin/custom-orders')
@@ -69,13 +69,13 @@ export class CustomOrdersAdminController {
   // 分页查询后台定制订单。
   @Get()
   list(@Query() query: CustomOrderQuery, @Req() req: AdminRequest) {
-    return this.service.manageList(query, req.admin);
+    return this.service.manageList(query, req.admin)
   }
 
   // 按订单号查询定制订单详情。
   @Get(':orderNo')
   detail(@Param('orderNo') no: string, @Req() req: AdminRequest) {
-    return this.service.manageDetail(no, req.admin);
+    return this.service.manageDetail(no, req.admin)
   }
 
   // 校验订单状态及版本，执行履约操作。
@@ -86,7 +86,7 @@ export class CustomOrdersAdminController {
     @Body() dto: CustomOrderAction,
     @Req() req: AdminRequest,
   ) {
-    return this.service.action(no, dto, req.admin);
+    return this.service.action(no, dto, req.admin)
   }
 }
 @Controller('admin/custom-settings')
@@ -98,12 +98,12 @@ export class CustomSettingsController {
   // 读取平台定制配送和联系方式设置。
   @Get()
   get(@Req() req: AdminRequest) {
-    return this.service.settings(req.admin);
+    return this.service.settings(req.admin)
   }
 
   // 保存平台定制服务设置。
   @Put()
   save(@Body() dto: BouquetSettingsDto, @Req() req: AdminRequest) {
-    return this.service.saveSettings(dto, req.admin);
+    return this.service.saveSettings(dto, req.admin)
   }
 }

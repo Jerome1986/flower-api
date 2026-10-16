@@ -1,4 +1,4 @@
-import { Transform } from 'class-transformer';
+import { Transform } from 'class-transformer'
 import {
   IsBoolean,
   IsNotEmpty,
@@ -6,8 +6,8 @@ import {
   Matches,
   MaxLength,
   ValidateIf,
-} from 'class-validator';
-import { trim } from '../addresses.utils';
+} from 'class-validator'
+import { trim } from '../addresses.utils'
 
 // PUT 接收完整表单；用户归属取 Token，禁止传入 userId。
 export class SaveAddressDto {
@@ -15,43 +15,43 @@ export class SaveAddressDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(64)
-  name!: string;
+  name!: string
 
   @Transform(trim)
   @IsString()
   @Matches(/^1\d{10}$/, { message: '请填写正确的手机号' })
-  phone!: string;
+  phone!: string
 
   @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(64)
-  province!: string;
+  province!: string
 
   @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(64)
-  city!: string;
+  city!: string
 
   @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(64)
-  district!: string;
+  district!: string
 
   @ValidateIf((_object, value) => value !== undefined)
   @Transform(trim)
   @IsString()
   @MaxLength(32)
-  regionCode?: string;
+  regionCode?: string
 
   @Transform(trim)
   @IsString()
   @IsNotEmpty()
   @MaxLength(500)
-  detail!: string;
+  detail!: string
 
   @IsBoolean()
-  isDefault!: boolean;
+  isDefault!: boolean
 }

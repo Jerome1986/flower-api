@@ -1,15 +1,16 @@
-import { ValidationPipe } from '@nestjs/common';
-import { NestFactory, Reflector } from '@nestjs/core';
-import { AppModule } from './app.module';
-import { ResponseInterceptor } from './common/interceptors/response.interceptor';
+import { ValidationPipe } from '@nestjs/common'
+import { NestFactory, Reflector } from '@nestjs/core'
+import { AppModule } from './app.module'
+import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 
+// 初始化应用，注册全局前缀、校验和响应拦截器并启动监听。
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule)
   // ✅ 开启 CORS，解决所有跨域（最简单版）
-  app.enableCors();
-  app.setGlobalPrefix('api');
+  app.enableCors()
+  app.setGlobalPrefix('api')
 
-  app.useGlobalInterceptors(new ResponseInterceptor(app.get(Reflector)));
+  app.useGlobalInterceptors(new ResponseInterceptor(app.get(Reflector)))
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -22,8 +23,8 @@ async function bootstrap() {
       // 4. 自动把前端传的字符串参数转为 DTO 定义的类型（如 string 转 number）
       transform: true,
     }),
-  );
+  )
 
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(process.env.PORT ?? 3000)
 }
-bootstrap();
+bootstrap()

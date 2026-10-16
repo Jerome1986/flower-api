@@ -1,5 +1,5 @@
-import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
-import { ShopService } from './shop.service';
+import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common'
+import { ShopService } from './shop.service'
 
 @Controller('shop/stores')
 export class ShopController {
@@ -9,19 +9,19 @@ export class ShopController {
   // 查询当前可访问的门店。
   @Get()
   stores() {
-    return this.shop.stores();
+    return this.shop.stores()
   }
 
   // 查询可用门店详情。
   @Get(':storeId')
   store(@Param('storeId', ParseIntPipe) id: number) {
-    return this.shop.store(id);
+    return this.shop.store(id)
   }
 
   // 查询门店已上架的商品。
   @Get(':storeId/products')
   products(@Param('storeId', ParseIntPipe) id: number) {
-    return this.shop.products(id);
+    return this.shop.products(id)
   }
 
   // 查询门店已上架的指定商品。
@@ -30,6 +30,6 @@ export class ShopController {
     @Param('storeId', ParseIntPipe) storeId: number,
     @Param('productId', ParseIntPipe) productId: number,
   ) {
-    return this.shop.product(storeId, productId);
+    return this.shop.product(storeId, productId)
   }
 }

@@ -1,77 +1,126 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-
+import { Injectable } from '@nestjs/common'
+import { Prisma, Store } from '@prisma/client'
+import { PrismaService } from '../prisma/prisma.service'
+import { QueryStoreDto } from './dto/query-store.dto'
+export const managerInclude = {
+  manager: { select: { id: true, phone: true, nickname: true } },
+} as const
+type StoreWithManager = Store & {
+  managerId: number | null
+  manager: { id: number; phone: string; nickname: string | null } | null
+}
 @Injectable()
 export class StoreRepository {
-  // 注入数据库连接，集中管理本模块的数据读写。
+  // 注入数据库连接，集中处理门店数据读写。
   constructor(private readonly prisma: PrismaService) {}
 
-  // 复用 Prisma 事务重载，保留数组事务的延迟执行和交互事务的隔离级别。
-  get transaction(): PrismaService['$transaction'] {
-    return this.prisma.$transaction.bind(this.prisma);
+  // 按手机号创建或更新店长用户。
+  saveManager(
+    phone: string,
+    create: Prisma.UserUncheckedCreateInput,
+    update: Prisma.UserUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const db = tx ?? this.prisma
+    return db.user.upsert({
+      where: { phone },
+      create,
+      update,
+      select: { id: true, enabled: true },
+    })
   }
 
-  // 新增或更新用户。
-  upsertUser<T extends Prisma.UserUpsertArgs>(
-    args: Prisma.SelectSubset<T, Prisma.UserUpsertArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.user.upsert(args);
+  // 创建门店并返回店长信息。
+  createStore(data: Prisma.StoreCreateInput, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.store.create({
+      data,
+      include: managerInclude,
+    })
   }
 
-  // 新增门店。
-  createStore<T extends Prisma.StoreCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.store.create(args);
+  // 按 ID 查询门店及展示所需关联信息。
+  findById(id: number) {
+    return this.prisma.store.findUnique({
+      where: { id },
+      include: managerInclude,
+    })
   }
 
-  // 查询符合条件的门店。
-  findManyStore<T extends Prisma.StoreFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.store.findMany(args);
+  // 读取门店当前绑定的店长 ID。
+  findManager(id: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.store.findUnique({
+      where: { id },
+      select: { managerId: true },
+    })
   }
 
-  // 统计门店。
-  countStore<T extends Prisma.StoreCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 更新门店并返回店长信息。
+  updateStore(
+    id: number,
+    data: Prisma.StoreUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.store.count(args);
+    const db = tx ?? this.prisma
+    return db.store.update({
+      where: { id },
+      data,
+      include: managerInclude,
+    })
   }
 
-  // 按唯一条件查询门店。
-  findUniqueStore<T extends Prisma.StoreFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.store.findUnique(args);
+  // 统计店长当前关联的门店数量。
+  countByManagerId(currentManagerId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.store.count({ where: { managerId: currentManagerId } })
   }
 
-  // 更新门店。
-  updateStore<T extends Prisma.StoreUpdateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreUpdateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 将不再管理门店的店长恢复为客户角色。
+  restoreCustomerRole(
+    currentManagerId: number,
+    data: Prisma.UserUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.store.update(args);
+    const db = tx ?? this.prisma
+    return db.user.updateMany({
+      where: { id: currentManagerId, role: 'STORE_MANAGER' },
+      data,
+    })
   }
-
-  // 批量更新用户。
-  updateManyUser<T extends Prisma.UserUpdateManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.UserUpdateManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 在传入事务中按筛选条件分页查询门店及总数。
+  async findPage(
+    query: QueryStoreDto,
+    storeIds: number[] | undefined,
+    tx: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.user.updateMany(args);
+    const keyword = query.keyword?.trim()
+    const where: Prisma.StoreWhereInput = {
+      ...(storeIds
+        ? { id: storeIds.length === 1 ? storeIds[0] : { in: storeIds } }
+        : {}),
+      ...(query.enabled !== undefined ? { enabled: query.enabled } : {}),
+      ...(query.isOpen !== undefined ? { isOpen: query.isOpen } : {}),
+      ...(keyword
+        ? {
+            OR: [
+              ...['code', 'name', 'address', 'phone'].map((field) => ({
+                [field]: { contains: keyword },
+              })),
+              { manager: { is: { phone: { contains: keyword } } } },
+            ],
+          }
+        : {}),
+    }
+    return [
+      await tx.store.findMany({
+        where,
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
+        include: managerInclude,
+      }),
+      await tx.store.count({ where }),
+    ] as const
   }
 }

@@ -7,12 +7,12 @@ import {
   Post,
   Req,
   UseGuards,
-} from '@nestjs/common';
-import { UserAuthGuard } from '../user-auth/user-auth.guard';
-import { type UserRequest } from '../user-auth/user-auth.types';
-import { CreateOrderDto } from './dto/create-order.dto';
-import { QuoteOrderDto } from './dto/quote-order.dto';
-import { OrdersService } from './orders.service';
+} from '@nestjs/common'
+import { UserAuthGuard } from '../user-auth/user-auth.guard'
+import { type UserRequest } from '../user-auth/user-auth.types'
+import { CreateOrderDto } from './dto/create-order.dto'
+import { QuoteOrderDto } from './dto/quote-order.dto'
+import { OrdersService } from './orders.service'
 
 @Controller('user/orders')
 @UseGuards(UserAuthGuard)
@@ -24,31 +24,31 @@ export class OrdersController {
   @Post('quote')
   @HttpCode(200)
   quote(@Req() req: UserRequest, @Body() dto: QuoteOrderDto) {
-    return this.service.quote(req.userId, dto);
+    return this.service.quote(req.userId, dto)
   }
 
   // 新增订单。
   @Post()
   create(@Req() req: UserRequest, @Body() dto: CreateOrderDto) {
-    return this.service.create(req.userId, dto);
+    return this.service.create(req.userId, dto)
   }
 
   // 查询订单列表。
   @Get()
   list(@Req() req: UserRequest) {
-    return this.service.list(req.userId);
+    return this.service.list(req.userId)
   }
 
   // 查询订单详情。
   @Get(':orderNo')
   detail(@Req() req: UserRequest, @Param('orderNo') no: string) {
-    return this.service.detail(req.userId, no);
+    return this.service.detail(req.userId, no)
   }
 
   // 取消订单并在同一事务中释放预留库存。
   @Post(':orderNo/cancel')
   @HttpCode(200)
   cancel(@Req() req: UserRequest, @Param('orderNo') no: string) {
-    return this.service.cancel(req.userId, no);
+    return this.service.cancel(req.userId, no)
   }
 }

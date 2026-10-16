@@ -1,6 +1,6 @@
-import { Body, Controller, Post } from '@nestjs/common';
-import { AdminService } from './admin.service';
-import { LoginAdminDto } from './dto/login-admin.dto';
+import { Body, Controller, Post } from '@nestjs/common'
+import { AdminService } from './admin.service'
+import { LoginAdminDto } from './dto/login-admin.dto'
 
 @Controller('admin')
 export class AdminController {
@@ -10,6 +10,6 @@ export class AdminController {
   // 管理员登录
   @Post('login')
   adminLogin(@Body() loginAdminDto: LoginAdminDto) {
-    return this.adminService.login(loginAdminDto);
+    return this.adminService.login(loginAdminDto)
   }
 }

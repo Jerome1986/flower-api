@@ -1,4 +1,4 @@
-import { Transform, Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer'
 import {
   IsBoolean,
   IsInt,
@@ -7,39 +7,40 @@ import {
   Max,
   MaxLength,
   Min,
-} from 'class-validator';
+} from 'class-validator'
 
+// 将查询参数中的 true 和 false 字符串转换为布尔值。
 const QueryBoolean = () =>
   Transform(({ value }: { value: unknown }) =>
     value === 'true' ? true : value === 'false' ? false : value,
-  );
+  )
 
 export class QueryStoreDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(1000000)
-  page: number = 1;
+  page: number = 1
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(100)
-  pageSize: number = 10;
+  pageSize: number = 10
 
   /** 按编号、名称、地址或电话模糊搜索 */
   @IsOptional()
   @IsString()
   @MaxLength(100)
-  keyword?: string;
+  keyword?: string
 
   @IsOptional()
   @QueryBoolean()
   @IsBoolean()
-  enabled?: boolean;
+  enabled?: boolean
 
   @IsOptional()
   @QueryBoolean()
   @IsBoolean()
-  isOpen?: boolean;
+  isOpen?: boolean
 }

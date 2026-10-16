@@ -5,26 +5,26 @@ import {
   MaxLength,
   Min,
   MinLength,
-} from 'class-validator';
+} from 'class-validator'
 
 export class QuoteBouquetDto {
   @IsInt()
   @Min(1)
   @Max(2147483647)
-  bouquetId!: number;
+  bouquetId!: number
 
   @IsInt()
   @Min(1)
   @Max(2147483647)
-  specId!: number;
+  specId!: number
 
   @IsInt()
   @Min(1)
   @Max(999)
-  quantity!: number;
+  quantity!: number
 
   @IsString()
   @MinLength(1)
   @MaxLength(500)
-  address!: string;
+  address!: string
 }

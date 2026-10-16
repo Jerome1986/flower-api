@@ -1,8 +1,8 @@
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
-import 'reflect-metadata';
-import { SalesQueryDto } from './dto/sales-query.dto';
-import { salesRange } from './sales.utils';
+import { plainToInstance } from 'class-transformer'
+import { validate } from 'class-validator'
+import 'reflect-metadata'
+import { SalesQueryDto } from './dto/sales-query.dto'
+import { salesRange } from './sales.utils'
 describe('销售统计北京时间边界', () => {
   it.each([
     [
@@ -36,10 +36,10 @@ describe('销售统计北京时间边界', () => {
       '2026-03-01T16:00:00.000Z',
     ],
   ])('%s %s', (period, now, start, end) => {
-    const range = salesRange(period as SalesQueryDto['period'], new Date(now));
-    expect(range.start.toISOString()).toBe(start);
-    expect(range.end.toISOString()).toBe(end);
-  });
+    const range = salesRange(period as SalesQueryDto['period'], new Date(now))
+    expect(range.start.toISOString()).toBe(start)
+    expect(range.end.toISOString()).toBe(end)
+  })
   it.each([
     {},
     { storeId: '0', period: 'today' },
@@ -51,13 +51,13 @@ describe('销售统计北京时间边界', () => {
   ])('拒绝无效筛选 %j', async (query) => {
     expect(
       (await validate(plainToInstance(SalesQueryDto, query))).length,
-    ).toBeGreaterThan(0);
-  });
+    ).toBeGreaterThan(0)
+  })
   it('接受门店和全部已有时间筛选', async () => {
     for (const period of ['today', 'week', 'month']) {
-      const query = plainToInstance(SalesQueryDto, { storeId: '42', period });
-      expect(await validate(query)).toEqual([]);
-      expect(query.storeId).toBe(42);
+      const query = plainToInstance(SalesQueryDto, { storeId: '42', period })
+      expect(await validate(query)).toEqual([])
+      expect(query.storeId).toBe(42)
     }
-  });
-});
+  })
+})

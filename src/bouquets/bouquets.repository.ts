@@ -1,131 +1,185 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-
+import { Injectable } from '@nestjs/common'
+import { Prisma, type OrderStatus } from '@prisma/client'
+import { PrismaService } from '../prisma/prisma.service'
+import { CustomOrderQuery } from './dto/custom-order-query.dto'
+export const productInclude = {
+  specs: {
+    where: { enabled: true },
+    orderBy: [{ sortOrder: 'asc' as const }, { id: 'asc' as const }],
+  },
+} satisfies Prisma.ProductInclude
+export const orderInclude = {
+  item: true,
+  logs: { orderBy: { createdAt: 'asc' as const } },
+} satisfies Prisma.OrderInclude
+type SavedOrder = Prisma.OrderGetPayload<{ include: typeof orderInclude }>
 @Injectable()
 export class BouquetsRepository {
-  // 注入数据库连接，集中管理本模块的数据读写。
+  // 注入数据库连接，集中处理定制花束数据读写。
   constructor(private readonly prisma: PrismaService) {}
 
-  // 复用 Prisma 事务重载，保留数组事务的延迟执行和交互事务的隔离级别。
-  get transaction(): PrismaService['$transaction'] {
-    return this.prisma.$transaction.bind(this.prisma);
+  // 读取平台单例配置。
+  findConfig(tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.platformConfig.findUnique({ where: { id: 1 } })
   }
 
-  // 按唯一条件查询平台配置。
-  findUniquePlatformConfig<T extends Prisma.PlatformConfigFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.PlatformConfigFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.platformConfig.findUnique(args);
+  // 查询启用的定制商品及有效规格。
+  findProducts() {
+    return this.prisma.product.findMany({
+      where: {
+        type: 'CUSTOM',
+        enabled: true,
+        specs: { some: { enabled: true } },
+      },
+      include: productInclude,
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    })
   }
 
-  // 查询符合条件的商品。
-  findManyProduct<T extends Prisma.ProductFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.findMany(args);
+  // 按 ID 查询启用的定制商品及有效规格。
+  findProductById(id: number) {
+    return this.prisma.product.findFirst({
+      where: {
+        id,
+        type: 'CUSTOM',
+        enabled: true,
+        specs: { some: { enabled: true } },
+      },
+      include: productInclude,
+    })
   }
 
-  // 查询首条符合条件的商品。
-  findFirstProduct<T extends Prisma.ProductFindFirstArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductFindFirstArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.findFirst(args);
+  // 查询可下单的定制商品及启用规格。
+  findAvailableProduct(bouquetId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.product.findFirst({
+      where: { id: bouquetId, type: 'CUSTOM', enabled: true },
+      include: productInclude,
+    })
   }
 
-  // 按唯一条件查询订单。
-  findUniqueOrder<T extends Prisma.OrderFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 按用户与请求幂等键查询已创建的订单。
+  findByRequestKey(
+    userId: number,
+    requestKey: string,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.findUnique(args);
+    const db = tx ?? this.prisma
+    return db.order.findUnique({
+      where: {
+        userId_requestKey: { userId, requestKey: requestKey },
+      },
+      include: orderInclude,
+    })
   }
 
-  // 新增订单。
-  createOrder<T extends Prisma.OrderCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 创建订单并返回订单明细与日志。
+  createOrder(
+    data: Prisma.OrderUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.create(args);
+    const db = tx ?? this.prisma
+    return db.order.create({
+      data,
+      include: orderInclude,
+    })
   }
 
-  // 新增或更新平台配置。
-  upsertPlatformConfig<T extends Prisma.PlatformConfigUpsertArgs>(
-    args: Prisma.SelectSubset<T, Prisma.PlatformConfigUpsertArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 创建或更新平台单例配置。
+  saveConfig(
+    create: Prisma.PlatformConfigUncheckedCreateInput,
+    update: Prisma.PlatformConfigUncheckedUpdateInput,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.platformConfig.upsert(args);
+    return this.prisma.platformConfig.upsert({
+      where: { id: 1 },
+      create,
+      update,
+    })
   }
 
-  // 查询符合条件的订单。
-  findManyOrder<T extends Prisma.OrderFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.findMany(args);
+  // 读取定制订单详情及派送记录。
+  findOrderDetail(orderNo: string) {
+    return this.prisma.order.findFirst({
+      where: { orderNo, type: 'CUSTOM' },
+      include: {
+        ...orderInclude,
+        dispatches: { orderBy: { createdAt: 'asc' } },
+      },
+    })
   }
 
-  // 统计订单。
-  countOrder<T extends Prisma.OrderCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.count(args);
+  // 按订单号查询定制订单。
+  findOrder(orderNo: string, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.order.findFirst({
+      where: { orderNo, type: 'CUSTOM' },
+      include: orderInclude,
+    })
   }
 
-  // 查询首条符合条件的订单。
-  findFirstOrder<T extends Prisma.OrderFindFirstArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderFindFirstArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 按订单状态和版本更新订单，防止并发覆盖。
+  updateOrder(
+    orderId: number,
+    version: number,
+    orderStatus: OrderStatus,
+    data: Prisma.OrderUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.findFirst(args);
+    const db = tx ?? this.prisma
+    return db.order.updateMany({
+      where: {
+        id: orderId,
+        type: 'CUSTOM',
+        version: version,
+        status: orderStatus,
+      },
+      data,
+    })
   }
 
-  // 批量更新订单。
-  updateManyOrder<T extends Prisma.OrderUpdateManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderUpdateManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 记录定制订单派送信息。
+  createDispatch(
+    data: Prisma.OrderDispatchUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.updateMany(args);
+    const db = tx ?? this.prisma
+    return db.orderDispatch.create({
+      data,
+    })
   }
 
-  // 新增orderDispatch。
-  createOrderDispatch<T extends Prisma.OrderDispatchCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderDispatchCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 记录订单状态变更流水。
+  createOrderLog(
+    data: Prisma.OrderLogUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.orderDispatch.create(args);
+    const db = tx ?? this.prisma
+    return db.orderLog.create({
+      data,
+    })
   }
 
-  // 新增订单日志。
-  createOrderLog<T extends Prisma.OrderLogCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderLogCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.orderLog.create(args);
+  // 按 ID 读取订单，不存在时抛出异常。
+  getOrderById(orderId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: orderInclude,
+    })
   }
-
-  // 按唯一条件查询，不存在时抛出异常订单。
-  findUniqueOrThrowOrder<T extends Prisma.OrderFindUniqueOrThrowArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderFindUniqueOrThrowArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.findUniqueOrThrow(args);
+  // 在传入事务中分页查询定制订单及总数。
+  async findOrderPage(query: CustomOrderQuery, tx: Prisma.TransactionClient) {
+    const where = { type: 'CUSTOM' as const, status: query.status }
+    return [
+      await tx.order.findMany({
+        where,
+        include: orderInclude,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      await tx.order.count({ where }),
+    ] as const
   }
 }

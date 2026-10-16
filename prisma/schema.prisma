@@ -226,8 +226,6 @@ model PlatformConfig {
   id              Int      @id @default(1)
   /// 是否开放定制服务
   customEnabled   Boolean  @default(true) @map("custom_enabled")
-  /// 配送服务区域说明
-  deliveryArea    String?  @map("delivery_area") @db.Text
   /// 固定配送费（元）
   deliveryFee     Decimal  @default(0) @map("delivery_fee") @db.Decimal(12, 2)
   /// 营业时间说明
@@ -442,8 +440,6 @@ model User {
   id           Int           @id @default(autoincrement())
   /// 微信小程序用户唯一标识，后台按手机号注册的店长首次授权前为空
   openId       String?       @unique @map("open_id") @db.VarChar(128)
-  /// 微信开放平台用户统一标识
-  unionId      String?       @unique @map("union_id") @db.VarChar(128)
   /// 用户唯一手机号，支持微信授权或平台设置店长时录入
   phone        String        @unique @db.VarChar(32)
   /// 用户身份，店长可关联多家门店并保留购物能力

@@ -1,113 +1,171 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { Injectable } from '@nestjs/common'
+import { OrderStatus, Prisma } from '@prisma/client'
+import { type CurrentAdmin } from '../common/guards/admin-auth.guard'
+import type { StoreAccess } from '../common/types/store-access'
+import { PrismaService } from '../prisma/prisma.service'
+import { OrderQuery } from './dto/order-query.dto'
+export const include = {
+  item: true,
+  logs: { orderBy: { createdAt: 'asc' as const } },
+} satisfies Prisma.OrderInclude
 
 @Injectable()
 export class ManageOrdersRepository {
-  // 注入数据库连接，集中管理本模块的数据读写。
+  // 注入数据库连接，集中处理订单数据读写。
   constructor(private readonly prisma: PrismaService) {}
 
-  // 复用 Prisma 事务重载，保留数组事务的延迟执行和交互事务的隔离级别。
-  get transaction(): PrismaService['$transaction'] {
-    return this.prisma.$transaction.bind(this.prisma);
+  // 查询管理员权限范围内的门店选项。
+  findStores(admin: CurrentAdmin) {
+    return this.prisma.store.findMany({
+      where:
+        admin.role === 'STORE_MANAGER'
+          ? { managerId: admin.id }
+          : admin.role === 'STORE_ADMIN'
+            ? { id: admin.storeId! }
+            : {},
+      select: { id: true, name: true },
+      orderBy: { id: 'asc' },
+    })
   }
 
-  // 查询符合条件的门店。
-  findManyStore<T extends Prisma.StoreFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.store.findMany(args);
+  // 按订单号及管理员门店权限查询普通订单。
+  findOrder(no: string, scope: StoreAccess, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.order.findFirst({
+      where: { AND: [{ orderNo: no }, this.orderWhere(scope)] },
+      include,
+    })
   }
 
-  // 查询符合条件的订单。
-  findManyOrder<T extends Prisma.OrderFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 按订单状态和版本更新订单，防止并发覆盖。
+  updateOrder(
+    orderId: number,
+    orderVersion: number,
+    orderStatus: OrderStatus,
+    data: Prisma.OrderUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.findMany(args);
+    const db = tx ?? this.prisma
+    return db.order.updateMany({
+      where: { id: orderId, version: orderVersion, status: orderStatus },
+      data,
+    })
   }
 
-  // 统计订单。
-  countOrder<T extends Prisma.OrderCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.count(args);
+  // 按订单预占幂等键查询库存流水。
+  findReservation(orderId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.inventoryLog.findUnique({
+      where: { operationKey: `reserve:${orderId}` },
+    })
   }
 
-  // 查询首条符合条件的订单。
-  findFirstOrder<T extends Prisma.OrderFindFirstArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderFindFirstArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.findFirst(args);
+  // 按库存 ID 读取库存，不存在时抛出异常。
+  getStock(reservationStockId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.storeStock.findUniqueOrThrow({
+      where: { id: reservationStockId },
+    })
   }
 
-  // 批量更新订单。
-  updateManyOrder<T extends Prisma.OrderUpdateManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderUpdateManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 校验版本及预占数量后核销库存。
+  consumeStock(
+    stockId: number,
+    stockVersion: number,
+    quantity: number,
+    data: Prisma.StoreStockUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.updateMany(args);
+    const db = tx ?? this.prisma
+    return db.storeStock.updateMany({
+      where: {
+        id: stockId,
+        version: stockVersion,
+        reserved: { gte: quantity },
+      },
+      data,
+    })
   }
 
-  // 按唯一条件查询库存流水。
-  findUniqueInventoryLog<T extends Prisma.InventoryLogFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.InventoryLogFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 写入库存操作流水。
+  createInventoryLog(
+    data: Prisma.InventoryLogUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.inventoryLog.findUnique(args);
+    const db = tx ?? this.prisma
+    return db.inventoryLog.create({
+      data,
+    })
   }
 
-  // 按唯一条件查询，不存在时抛出异常门店库存。
-  findUniqueOrThrowStoreStock<T extends Prisma.StoreStockFindUniqueOrThrowArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreStockFindUniqueOrThrowArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 记录订单状态变更流水。
+  createOrderLog(
+    data: Prisma.OrderLogUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeStock.findUniqueOrThrow(args);
+    const db = tx ?? this.prisma
+    return db.orderLog.create({
+      data,
+    })
   }
 
-  // 批量更新门店库存。
-  updateManyStoreStock<T extends Prisma.StoreStockUpdateManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreStockUpdateManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeStock.updateMany(args);
+  // 按 ID 读取订单，不存在时抛出异常。
+  getById(orderId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.order.findUniqueOrThrow({ where: { id: orderId }, include })
   }
-
-  // 新增库存流水。
-  createInventoryLog<T extends Prisma.InventoryLogCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.InventoryLogCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 在传入事务中按筛选条件分页查询订单及总数。
+  async findPage(
+    scope: StoreAccess,
+    query: OrderQuery,
+    tx: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.inventoryLog.create(args);
+    const groups: Record<string, OrderStatus[]> = {
+      unpaid: ['PENDING_PAYMENT'],
+      pending: ['PENDING_ACCEPTANCE'],
+      preparing: ['ACCEPTED'],
+      ready: ['READY'],
+      delivering: ['DELIVERING'],
+      completed: ['COMPLETED'],
+      cancelled: ['CANCELLED', 'CLOSED'],
+    }
+    const where: Prisma.OrderWhereInput = {
+      AND: [
+        this.orderWhere(scope),
+        { storeId: query.storeId, status: query.status },
+        query.statusGroup && groups[query.statusGroup]
+          ? { status: { in: groups[query.statusGroup] } }
+          : {},
+        query.keyword?.trim()
+          ? {
+              OR: [
+                { orderNo: { contains: query.keyword.trim() } },
+                { contactPhone: { contains: query.keyword.trim() } },
+                { contactName: { contains: query.keyword.trim() } },
+              ],
+            }
+          : {},
+      ],
+    }
+    return [
+      await tx.order.findMany({
+        where,
+        include,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      await tx.order.count({ where }),
+    ] as const
   }
-
-  // 新增订单日志。
-  createOrderLog<T extends Prisma.OrderLogCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderLogCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.orderLog.create(args);
-  }
-
-  // 按唯一条件查询，不存在时抛出异常订单。
-  findUniqueOrThrowOrder<T extends Prisma.OrderFindUniqueOrThrowArgs>(
-    args: Prisma.SelectSubset<T, Prisma.OrderFindUniqueOrThrowArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.order.findUniqueOrThrow(args);
+  // 按管理员门店范围构建普通订单查询条件。
+  private orderWhere(scope: StoreAccess): Prisma.OrderWhereInput {
+    return {
+      type: 'ORDINARY',
+      storeId: scope.storeId,
+      ...(scope.managerId !== undefined
+        ? { store: { managerId: scope.managerId } }
+        : {}),
+    }
   }
 }

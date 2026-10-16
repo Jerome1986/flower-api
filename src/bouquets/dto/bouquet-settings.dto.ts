@@ -5,33 +5,27 @@ import {
   Max,
   MaxLength,
   Min,
-  MinLength,
-} from 'class-validator';
+} from 'class-validator'
 
 export class BouquetSettingsDto {
   @IsBoolean()
-  customEnabled!: boolean;
-
-  @IsString()
-  @MinLength(1)
-  @MaxLength(500)
-  deliveryArea!: string;
+  customEnabled!: boolean
 
   /** 整数分。 */
   @IsInt()
   @Min(0)
   @Max(999999999)
-  deliveryFee!: number;
+  deliveryFee!: number
 
   @IsString()
   @MaxLength(255)
-  businessHours!: string;
+  businessHours!: string
 
   @IsString()
   @MaxLength(32)
-  servicePhone!: string;
+  servicePhone!: string
 
   @IsString()
   @MaxLength(255)
-  deliveryStaff!: string;
+  deliveryStaff!: string
 }

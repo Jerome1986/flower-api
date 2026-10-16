@@ -1,8 +1,8 @@
-import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
-import { AdminController } from './admin.controller';
-import { AdminRepository } from './admin.repository';
-import { AdminService } from './admin.service';
+import { Module } from '@nestjs/common'
+import { JwtModule } from '@nestjs/jwt'
+import { AdminController } from './admin.controller'
+import { AdminRepository } from './admin.repository'
+import { AdminService } from './admin.service'
 
 @Module({
   imports: [
@@ -13,6 +13,6 @@ import { AdminService } from './admin.service';
   ],
   controllers: [AdminController],
   providers: [AdminService, AdminRepository],
-  exports: [JwtModule],
+  exports: [JwtModule, AdminRepository],
 })
 export class AdminModule {}

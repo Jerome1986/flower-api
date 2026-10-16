@@ -1,4 +1,4 @@
-import { Transform, Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer'
 import {
   IsBoolean,
   IsInt,
@@ -7,37 +7,37 @@ import {
   Max,
   MaxLength,
   Min,
-} from 'class-validator';
+} from 'class-validator'
 
 export class StoreProductQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(1000000)
-  page = 1;
+  page = 1
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(100)
-  pageSize = 10;
+  pageSize = 10
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(2147483647)
-  storeId?: number;
+  storeId?: number
 
   @IsOptional()
   @IsString()
   @MaxLength(100)
-  keyword?: string;
+  keyword?: string
 
   @IsOptional()
   @Transform(({ value }: { value: unknown }) =>
     value === 'true' ? true : value === 'false' ? false : value,
   )
   @IsBoolean()
-  enabled?: boolean;
+  enabled?: boolean
 }

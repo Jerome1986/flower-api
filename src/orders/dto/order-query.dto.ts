@@ -1,5 +1,5 @@
-import { OrderStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { OrderStatus } from '@prisma/client'
+import { Type } from 'class-transformer'
 import {
   IsEnum,
   IsIn,
@@ -9,29 +9,29 @@ import {
   Max,
   MaxLength,
   Min,
-} from 'class-validator';
+} from 'class-validator'
 
 export class OrderQuery {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  page = 1;
+  page = 1
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(100)
-  pageSize = 20;
+  pageSize = 20
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  storeId?: number;
+  storeId?: number
 
   @IsOptional()
   @IsEnum(OrderStatus)
-  status?: OrderStatus;
+  status?: OrderStatus
 
   @IsOptional()
   @IsIn([
@@ -44,10 +44,10 @@ export class OrderQuery {
     'completed',
     'cancelled',
   ])
-  statusGroup?: string;
+  statusGroup?: string
 
   @IsOptional()
   @IsString()
   @MaxLength(64)
-  keyword?: string;
+  keyword?: string
 }

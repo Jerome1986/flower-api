@@ -33,7 +33,7 @@ async function main() {
             return Reflect.get(target, key);
           },
         });
-        const service = new BannerService(new BannerRepository(proxy));
+        const service = new BannerService(new BannerRepository(proxy), proxy);
         const admin = { role: 'PLATFORM_ADMIN' };
         const initial = await service.list(admin);
         const input = [

@@ -1,20 +1,20 @@
-import { IsInt, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsInt, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator'
 
 export class AdjustStockDto {
   @IsInt()
   @Min(0)
   @Max(2147483647)
-  available: number;
+  available: number
 
   @IsInt()
   @Min(0)
   @Max(2147483647)
-  version: number;
+  version: number
 
   @IsString()
   @MaxLength(500)
-  reason: string;
+  reason: string
 
   @IsUUID()
-  operationKey: string;
+  operationKey: string
 }

@@ -1,167 +1,254 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-
+import { Injectable } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import type { StoreAccess } from '../common/types/store-access'
+import { PrismaService } from '../prisma/prisma.service'
+import { CatalogQueryDto } from './dto/catalog-query.dto'
+import { StoreProductQueryDto } from './dto/store-product-query.dto'
+export const include = {
+  store: { select: { id: true, name: true, enabled: true } },
+  product: {
+    include: {
+      category: true,
+      specs: {
+        orderBy: [{ sortOrder: 'asc' as const }, { id: 'asc' as const }],
+      },
+    },
+  },
+  stocks: true,
+} satisfies Prisma.StoreProductInclude
+type SelectedProduct = Prisma.StoreProductGetPayload<{
+  include: typeof include
+}>
 @Injectable()
 export class StoreProductRepository {
-  // 注入数据库连接，集中管理本模块的数据读写。
+  // 注入数据库连接，集中处理门店商品数据读写。
   constructor(private readonly prisma: PrismaService) {}
 
-  // 复用 Prisma 事务重载，保留数组事务的延迟执行和交互事务的隔离级别。
-  get transaction(): PrismaService['$transaction'] {
-    return this.prisma.$transaction.bind(this.prisma);
+  // 按管理员门店权限范围查询目标门店。
+  findStore(
+    storeId: number,
+    scope: StoreAccess,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const db = tx ?? this.prisma
+    return db.store.findFirst({
+      where: {
+        AND: [
+          { id: storeId },
+          { id: scope.storeId, managerId: scope.managerId },
+        ],
+      },
+      select: { id: true, name: true, enabled: true },
+    })
   }
 
-  // 查询首条符合条件的门店。
-  findFirstStore<T extends Prisma.StoreFindFirstArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreFindFirstArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.store.findFirst(args);
+  // 按 ID 查询门店商品及展示所需关联信息。
+  findById(id: number, scope: StoreAccess, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.storeProduct.findFirst({
+      where: {
+        id,
+        store: { id: scope.storeId, managerId: scope.managerId },
+        product: { type: 'ORDINARY' },
+      },
+      include,
+    })
   }
 
-  // 查询首条符合条件的门店商品。
-  findFirstStoreProduct<T extends Prisma.StoreProductFindFirstArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreProductFindFirstArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeProduct.findFirst(args);
+  // 查询管理员权限范围内的门店选项。
+  findStores(scope: StoreAccess) {
+    return this.prisma.store.findMany({
+      where: { id: scope.storeId, managerId: scope.managerId },
+      select: { id: true, name: true, enabled: true },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    })
   }
 
-  // 查询符合条件的门店。
-  findManyStore<T extends Prisma.StoreFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.store.findMany(args);
+  // 查询平台商品及启用规格。
+  findProductWithSpecs(productId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.product.findUnique({
+      where: { id: productId },
+      include: { specs: { where: { enabled: true } } },
+    })
   }
 
-  // 查询符合条件的门店商品。
-  findManyStoreProduct<T extends Prisma.StoreProductFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreProductFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 创建门店选品记录。
+  createProduct(
+    data: Prisma.StoreProductUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeProduct.findMany(args);
+    const db = tx ?? this.prisma
+    return db.storeProduct.create({
+      data,
+    })
   }
 
-  // 统计门店商品。
-  countStoreProduct<T extends Prisma.StoreProductCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreProductCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 批量创建门店规格库存。
+  createStocks(
+    data: Prisma.StoreStockCreateManyInput[],
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeProduct.count(args);
+    const db = tx ?? this.prisma
+    return db.storeStock.createMany({
+      data,
+    })
   }
 
-  // 查询符合条件的商品。
-  findManyProduct<T extends Prisma.ProductFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 更新门店选品记录并返回关联信息。
+  updateProduct(
+    id: number,
+    data: Prisma.StoreProductUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.findMany(args);
+    const db = tx ?? this.prisma
+    return db.storeProduct.update({ where: { id }, data, include })
   }
 
-  // 统计商品。
-  countProduct<T extends Prisma.ProductCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.count(args);
+  // 按操作幂等键查询库存流水和库存记录。
+  findInventoryLog(operationKey: string, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.inventoryLog.findUnique({
+      where: { operationKey },
+      include: { stock: true },
+    })
   }
 
-  // 按唯一条件查询商品。
-  findUniqueProduct<T extends Prisma.ProductFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 补充缺失的规格库存，跳过已存在记录。
+  createMissingStocks(
+    data: Prisma.StoreStockCreateManyInput[],
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.findUnique(args);
+    const db = tx ?? this.prisma
+    return db.storeStock.createMany({
+      data,
+      skipDuplicates: true,
+    })
   }
 
-  // 新增门店商品。
-  createStoreProduct<T extends Prisma.StoreProductCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreProductCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeProduct.create(args);
+  // 按门店选品和规格读取库存，不存在时抛出异常。
+  getStock(id: number, specId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.storeStock.findUniqueOrThrow({
+      where: { storeProductId_specId: { storeProductId: id, specId } },
+    })
   }
 
-  // createMany门店库存。
-  createManyStoreStock<T extends Prisma.StoreStockCreateManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreStockCreateManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 校验版本与原库存数量后更新库存。
+  updateStock(
+    stockId: number,
+    version: number,
+    stockAvailable: number,
+    stockReserved: number,
+    data: Prisma.StoreStockUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeStock.createMany(args);
+    const db = tx ?? this.prisma
+    return db.storeStock.updateMany({
+      where: {
+        id: stockId,
+        version: version,
+        available: stockAvailable,
+        reserved: stockReserved,
+      },
+      data,
+    })
   }
 
-  // 更新门店商品。
-  updateStoreProduct<T extends Prisma.StoreProductUpdateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreProductUpdateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 写入库存操作流水。
+  createInventoryLog(
+    data: Prisma.InventoryLogUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeProduct.update(args);
+    const db = tx ?? this.prisma
+    return db.inventoryLog.create({
+      data,
+    })
+  }
+  // 在传入事务中按筛选条件分页查询门店商品及总数。
+  async findPage(
+    scope: StoreAccess,
+    query: StoreProductQueryDto,
+    tx: Prisma.TransactionClient,
+  ) {
+    const where: Prisma.StoreProductWhereInput = {
+      store: { id: scope.storeId, managerId: scope.managerId },
+      storeId: query.storeId,
+      enabled: query.enabled,
+      ...(query.keyword?.trim()
+        ? {
+            product: {
+              type: 'ORDINARY',
+              name: { contains: query.keyword.trim() },
+            },
+          }
+        : { product: { type: 'ORDINARY' } }),
+    }
+    return [
+      await tx.storeProduct.findMany({
+        where,
+        include,
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: { id: 'desc' },
+      }),
+      await tx.storeProduct.count({ where }),
+    ] as const
   }
 
-  // 按唯一条件查询库存流水。
-  findUniqueInventoryLog<T extends Prisma.InventoryLogFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.InventoryLogFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.inventoryLog.findUnique(args);
+  // 在传入事务中分页查询可选普通商品及门店选品状态。
+  async findCatalogPage(query: CatalogQueryDto, tx: Prisma.TransactionClient) {
+    const where: Prisma.ProductWhereInput = {
+      type: 'ORDINARY',
+      enabled: true,
+      specs: { some: { enabled: true } },
+      ...(query.keyword?.trim()
+        ? { name: { contains: query.keyword.trim() } }
+        : {}),
+    }
+    return [
+      await tx.product.findMany({
+        where,
+        include: {
+          category: true,
+          specs: {
+            where: { enabled: true },
+            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+          },
+          storeProducts: {
+            where: { storeId: query.storeId },
+            select: { id: true },
+          },
+        },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
+      }),
+      await tx.product.count({ where }),
+    ] as const
   }
 
-  // 按唯一条件查询，不存在时抛出异常门店库存。
-  findUniqueOrThrowStoreStock<T extends Prisma.StoreStockFindUniqueOrThrowArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreStockFindUniqueOrThrowArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 在传入事务中分页查询门店商品库存流水及总数。
+  async findLogsPage(
+    id: number,
+    query: StoreProductQueryDto,
+    tx: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeStock.findUniqueOrThrow(args);
-  }
-
-  // 批量更新门店库存。
-  updateManyStoreStock<T extends Prisma.StoreStockUpdateManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.StoreStockUpdateManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.storeStock.updateMany(args);
-  }
-
-  // 新增库存流水。
-  createInventoryLog<T extends Prisma.InventoryLogCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.InventoryLogCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.inventoryLog.create(args);
-  }
-
-  // 查询符合条件的库存流水。
-  findManyInventoryLog<T extends Prisma.InventoryLogFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.InventoryLogFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.inventoryLog.findMany(args);
-  }
-
-  // 统计库存流水。
-  countInventoryLog<T extends Prisma.InventoryLogCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.InventoryLogCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.inventoryLog.count(args);
+    const where: Prisma.InventoryLogWhereInput = {
+      stock: { storeProductId: id },
+    }
+    return [
+      await tx.inventoryLog.findMany({
+        where,
+        include: {
+          stock: { select: { spec: { select: { name: true, unit: true } } } },
+          admin: { select: { username: true } },
+        },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      }),
+      await tx.inventoryLog.count({ where }),
+    ] as const
   }
 }

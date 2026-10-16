@@ -1,95 +1,119 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-
+import { Injectable } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import { PrismaService } from '../prisma/prisma.service'
+import { CouponTemplateQueryDto } from './dto/coupon-template-query.dto'
+export const specInclude = {
+  product: {
+    select: { id: true, name: true, coverImage: true, enabled: true },
+  },
+} satisfies Prisma.ProductSpecInclude
+export const include = {
+  exchangeSpec: { include: specInclude },
+  _count: { select: { coupons: true, activities: true } },
+} satisfies Prisma.CouponTemplateInclude
+type TemplateDetail = Prisma.CouponTemplateGetPayload<{
+  include: typeof include
+}>
+type ExchangeSpec = Prisma.ProductSpecGetPayload<{
+  include: typeof specInclude
+}>
 @Injectable()
 export class CouponTemplateRepository {
-  // 注入数据库连接，集中管理本模块的数据读写。
+  // 注入数据库连接，集中处理优惠券模板数据读写。
   constructor(private readonly prisma: PrismaService) {}
 
-  // 复用 Prisma 事务重载，保留数组事务的延迟执行和交互事务的隔离级别。
-  get transaction(): PrismaService['$transaction'] {
-    return this.prisma.$transaction.bind(this.prisma);
+  // 按 ID 查询优惠券模板及展示所需关联信息。
+  findById(id: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.couponTemplate.findUnique({ where: { id }, include })
   }
 
-  // 按唯一条件查询优惠券模板。
-  findUniqueCouponTemplate<T extends Prisma.CouponTemplateFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.CouponTemplateFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 查询兑换规格及其商品信息。
+  findExchangeSpec(
+    exchangeSpecId: number | null | undefined,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.couponTemplate.findUnique(args);
+    const db = tx ?? this.prisma
+    return db.productSpec.findUnique({
+      where: { id: exchangeSpecId! },
+      include: specInclude,
+    })
   }
 
-  // 按唯一条件查询商品规格。
-  findUniqueProductSpec<T extends Prisma.ProductSpecFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductSpecFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productSpec.findUnique(args);
+  // 统计使用当前模板的赠花活动。
+  countGiftActivities(oldId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.marketingActivity.count({
+      where: { templateId: oldId, isFlowerGift: true },
+    })
   }
 
-  // 查询符合条件的优惠券模板。
-  findManyCouponTemplate<T extends Prisma.CouponTemplateFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.CouponTemplateFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 创建优惠券模板并返回关联信息。
+  createTemplate(
+    data: Prisma.CouponTemplateUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.couponTemplate.findMany(args);
+    const db = tx ?? this.prisma
+    return db.couponTemplate.create({ data, include })
   }
 
-  // 统计优惠券模板。
-  countCouponTemplate<T extends Prisma.CouponTemplateCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.CouponTemplateCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 更新优惠券模板并返回关联信息。
+  updateTemplate(
+    id: number,
+    data: Prisma.CouponTemplateUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.couponTemplate.count(args);
+    const db = tx ?? this.prisma
+    return db.couponTemplate.update({ where: { id }, data, include })
+  }
+  // 在传入事务中按筛选条件分页查询优惠券模板及总数。
+  async findPage(query: CouponTemplateQueryDto, tx: Prisma.TransactionClient) {
+    const where: Prisma.CouponTemplateWhereInput = {
+      type: query.type,
+      enabled: query.enabled,
+      ...(query.keyword?.trim()
+        ? { name: { contains: query.keyword.trim() } }
+        : {}),
+    }
+    return [
+      await tx.couponTemplate.findMany({
+        where,
+        include,
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: { id: 'desc' },
+      }),
+      await tx.couponTemplate.count({ where }),
+    ] as const
   }
 
-  // 查询符合条件的商品规格。
-  findManyProductSpec<T extends Prisma.ProductSpecFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductSpecFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 在传入事务中分页查询启用的兑换规格及总数。
+  async findExchangeSpecsPage(
+    query: CouponTemplateQueryDto,
+    tx: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productSpec.findMany(args);
-  }
-
-  // 统计商品规格。
-  countProductSpec<T extends Prisma.ProductSpecCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductSpecCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productSpec.count(args);
-  }
-
-  // 统计营销活动。
-  countMarketingActivity<T extends Prisma.MarketingActivityCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.MarketingActivityCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.marketingActivity.count(args);
-  }
-
-  // 新增优惠券模板。
-  createCouponTemplate<T extends Prisma.CouponTemplateCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.CouponTemplateCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.couponTemplate.create(args);
-  }
-
-  // 更新优惠券模板。
-  updateCouponTemplate<T extends Prisma.CouponTemplateUpdateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.CouponTemplateUpdateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.couponTemplate.update(args);
+    const keyword = query.keyword?.trim()
+    const where: Prisma.ProductSpecWhereInput = {
+      enabled: true,
+      product: { enabled: true },
+      ...(keyword
+        ? {
+            OR: [
+              { name: { contains: keyword } },
+              { product: { name: { contains: keyword } } },
+            ],
+          }
+        : {}),
+    }
+    return [
+      await tx.productSpec.findMany({
+        where,
+        include: specInclude,
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: [{ productId: 'asc' }, { sortOrder: 'asc' }, { id: 'asc' }],
+      }),
+      await tx.productSpec.count({ where }),
+    ] as const
   }
 }

@@ -40,9 +40,7 @@ async function main() {
             return Reflect.get(target, key);
           },
         });
-        const service = new CouponTemplateService(
-          new CouponTemplateRepository(proxy),
-        );
+        const service = new CouponTemplateService(new CouponTemplateRepository(proxy), proxy);
         const admin = {
           id: 1,
           role: 'PLATFORM_ADMIN',

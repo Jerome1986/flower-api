@@ -1,122 +1,143 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-
+import { Injectable } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import { PrismaService } from '../prisma/prisma.service'
+import { ProductQueryDto } from './dto/product-query.dto'
+export const include = {
+  category: true,
+  specs: { orderBy: [{ sortOrder: 'asc' as const }, { id: 'asc' as const }] },
+}
+type ProductDetail = Prisma.ProductGetPayload<{ include: typeof include }>
 @Injectable()
 export class ProductRepository {
-  // 注入数据库连接，集中管理本模块的数据读写。
+  // 注入数据库连接，集中处理商品数据读写。
   constructor(private readonly prisma: PrismaService) {}
 
-  // 复用 Prisma 事务重载，保留数组事务的延迟执行和交互事务的隔离级别。
-  get transaction(): PrismaService['$transaction'] {
-    return this.prisma.$transaction.bind(this.prisma);
+  // 按排序值和 ID 查询商品分类。
+  findCategories() {
+    return this.prisma.productCategory.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    })
   }
 
-  // 查询符合条件的商品分类。
-  findManyProductCategory<T extends Prisma.ProductCategoryFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductCategoryFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productCategory.findMany(args);
+  // 创建商品分类。
+  createCategory(data: Prisma.ProductCategoryUncheckedCreateInput) {
+    return this.prisma.productCategory.create({ data })
   }
 
-  // 新增商品分类。
-  createProductCategory<T extends Prisma.ProductCategoryCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductCategoryCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productCategory.create(args);
+  // 按 ID 更新商品分类。
+  updateCategory(id: number, data: Prisma.ProductCategoryUncheckedUpdateInput) {
+    return this.prisma.productCategory.update({ where: { id }, data })
   }
 
-  // 更新商品分类。
-  updateProductCategory<T extends Prisma.ProductCategoryUpdateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductCategoryUpdateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productCategory.update(args);
+  // 按 ID 查询商品及展示所需关联信息。
+  findById(id: number) {
+    return this.prisma.product.findUnique({
+      where: { id },
+      include,
+    })
   }
 
-  // 查询符合条件的商品。
-  findManyProduct<T extends Prisma.ProductFindManyArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductFindManyArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.findMany(args);
+  // 读取商品及全部规格，供编辑校验。
+  findWithSpecs(id: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.product.findUnique({
+      where: { id },
+      include: {
+        specs: true,
+      },
+    })
   }
 
-  // 统计商品。
-  countProduct<T extends Prisma.ProductCountArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductCountArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.count(args);
+  // 按 ID 查询商品分类。
+  findCategoryById(categoryId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.productCategory.findUnique({
+      where: { id: categoryId },
+    })
   }
 
-  // 按唯一条件查询商品。
-  findUniqueProduct<T extends Prisma.ProductFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 创建平台商品。
+  createProduct(
+    data: Prisma.ProductUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.findUnique(args);
+    const db = tx ?? this.prisma
+    return db.product.create({ data })
   }
 
-  // 按唯一条件查询商品分类。
-  findUniqueProductCategory<T extends Prisma.ProductCategoryFindUniqueArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductCategoryFindUniqueArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 更新平台商品。
+  updateProduct(
+    id: number,
+    data: Prisma.ProductUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productCategory.findUnique(args);
+    const db = tx ?? this.prisma
+    return db.product.update({ where: { id }, data })
   }
 
-  // 新增商品。
-  createProduct<T extends Prisma.ProductCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 按 ID 更新商品规格。
+  updateSpec(
+    specId: number,
+    data: Prisma.ProductSpecUncheckedUpdateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.create(args);
+    const db = tx ?? this.prisma
+    return db.productSpec.update({
+      where: { id: specId },
+      data,
+    })
   }
 
-  // 更新商品。
-  updateProduct<T extends Prisma.ProductUpdateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductUpdateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
+  // 创建商品规格。
+  createSpec(
+    data: Prisma.ProductSpecUncheckedCreateInput,
+    tx?: Prisma.TransactionClient,
   ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.update(args);
+    const db = tx ?? this.prisma
+    return db.productSpec.create({
+      data,
+    })
   }
 
-  // 更新商品规格。
-  updateProductSpec<T extends Prisma.ProductSpecUpdateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductSpecUpdateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productSpec.update(args);
+  // 按 ID 读取商品，不存在时抛出异常。
+  getById(savedId: number, tx?: Prisma.TransactionClient) {
+    const db = tx ?? this.prisma
+    return db.product.findUniqueOrThrow({
+      where: { id: savedId },
+      include,
+    })
   }
 
-  // 新增商品规格。
-  createProductSpec<T extends Prisma.ProductSpecCreateArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductSpecCreateArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.productSpec.create(args);
+  // 更新商品启用状态并返回展示字段。
+  updateStatus(id: number, data: Prisma.ProductUncheckedUpdateInput) {
+    return this.prisma.product.update({
+      where: { id },
+      data,
+      include,
+    })
   }
-
-  // 按唯一条件查询，不存在时抛出异常商品。
-  findUniqueOrThrowProduct<T extends Prisma.ProductFindUniqueOrThrowArgs>(
-    args: Prisma.SelectSubset<T, Prisma.ProductFindUniqueOrThrowArgs>,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    // 1. 优先使用调用方事务，保持关联读写处于同一事务中。
-    return db.product.findUniqueOrThrow(args);
+  // 在传入事务中按筛选条件分页查询商品及总数。
+  async findPage(query: ProductQueryDto, tx: Prisma.TransactionClient) {
+    const keyword = query.keyword?.trim()
+    const where: Prisma.ProductWhereInput = {
+      enabled: query.enabled,
+      type: query.type,
+      categoryId: query.categoryId,
+      ...(keyword
+        ? {
+            name: { contains: keyword },
+          }
+        : {}),
+    }
+    return [
+      await tx.product.findMany({
+        where,
+        include,
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
+      }),
+      await tx.product.count({ where }),
+    ] as const
   }
 }

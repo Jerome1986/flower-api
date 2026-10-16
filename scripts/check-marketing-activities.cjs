@@ -40,9 +40,7 @@ async function main() {
             return Reflect.get(target, key);
           },
         });
-        const service = new MarketingActivityService(
-          new MarketingActivityRepository(proxy),
-        );
+        const service = new MarketingActivityService(new MarketingActivityRepository(proxy), proxy);
         const admin = {
           id: 1,
           username: marker,
