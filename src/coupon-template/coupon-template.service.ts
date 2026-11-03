@@ -13,32 +13,45 @@ import { CouponTemplateQueryDto } from './dto/coupon-template-query.dto'
 import { SaveCouponTemplateDto } from './dto/save-coupon-template.dto'
 
 import { include, specInclude } from './coupon-template.repository'
+// 优惠券模板业务数据类型。
 type TemplateDetail = Prisma.CouponTemplateGetPayload<{
+  // 关联查询配置。
   include: typeof include
 }>
+// 优惠券模板业务数据类型。
 type ExchangeSpec = Prisma.ProductSpecGetPayload<{
+  // 关联查询配置。
   include: typeof specInclude
 }>
 
+// 优惠券模板业务服务。
 @Injectable()
 export class CouponTemplateService {
   // 注入数据访问层，统一处理优惠券模板的查询和事务写入。
   constructor(
+    // 业务数据访问层。
     private readonly repo: CouponTemplateRepository,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {
     // 1. 由 Nest 注入 Repository，统一执行数据库读写。
   }
 
   // 校验当前账号是否具有平台优惠券设置权限。
-  private authorize(admin: CurrentAdmin) {
+  private authorize(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 只允许超级管理员和平台管理员维护优惠券模板。
     if (!['SUPER_ADMIN', 'PLATFORM_ADMIN'].includes(admin.role))
       throw new ForbiddenException('仅平台管理员可管理优惠券设置')
   }
 
   // 将兑换规格和商品信息转换为后台选择、展示所需的数据。
-  private serializeSpec(spec: ExchangeSpec) {
+  private serializeSpec(
+    // 商品规格信息。
+    spec: ExchangeSpec,
+  ) {
     // 1. 返回必要的规格和商品字段，将价格转换为接口约定的整数分。
     return {
       id: spec.id,
@@ -51,7 +64,10 @@ export class CouponTemplateService {
   }
 
   // 将优惠券模板转换为统一响应，保留已停用兑换规格的回显信息。
-  private serialize(item: TemplateDetail) {
+  private serialize(
+    // 当前业务明细。
+    item: TemplateDetail,
+  ) {
     // 1. 转换现金面额，并关联兑换规格以及使用统计。
     return {
       id: item.id,
@@ -76,7 +92,12 @@ export class CouponTemplateService {
   }
 
   // 根据有效模板 ID 查找完整记录，不存在时返回明确错误。
-  private async find(id: number, tx?: Prisma.TransactionClient) {
+  private async find(
+    // 当前操作的记录编号。
+    id: number,
+    // 当前数据库事务。
+    tx?: Prisma.TransactionClient,
+  ) {
     // 1. 拒绝无效 ID，避免数据库参数错误。
     if (!Number.isInteger(id) || id <= 0 || id > 2147483647)
       throw new BadRequestException('请选择有效的优惠券')
@@ -88,8 +109,11 @@ export class CouponTemplateService {
 
   // 按券类型校验抵扣金额或兑换规则，并转换为数据库写入字段。
   private async rules(
+    // 接口请求参数。
     dto: SaveCouponTemplateDto,
+    // 修改前的记录。
     old: TemplateDetail | null,
+    // 当前数据库事务。
     tx: Prisma.TransactionClient,
   ) {
     // 1. 校验名称和发券后的有效时长。
@@ -131,6 +155,7 @@ export class CouponTemplateService {
     // 4. 新选或启用的兑换规格必须可售；停用模板可保留原来的失效规格。
     const spec = await this.repo.findExchangeSpec(dto.exchangeSpecId, tx)
     if (!spec) throw new BadRequestException('兑换商品规格不存在')
+    // 商品或规格是否不可用。
     const unavailable = !spec.enabled || !spec.product.enabled
     if (unavailable && (dto.enabled || old?.exchangeSpecId !== spec.id))
       throw new BadRequestException(
@@ -144,7 +169,12 @@ export class CouponTemplateService {
   }
 
   // 按名称、券类型和启用状态分页查询优惠券模板。
-  async list(query: CouponTemplateQueryDto, admin: CurrentAdmin) {
+  async list(
+    // 列表查询条件。
+    query: CouponTemplateQueryDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 校验权限并构造筛选条件。
     this.authorize(admin)
 
@@ -162,7 +192,12 @@ export class CouponTemplateService {
   }
 
   // 查询可用于兑换券的已上架商品规格，支持商品名和规格名搜索。
-  async exchangeSpecs(query: CouponTemplateQueryDto, admin: CurrentAdmin) {
+  async exchangeSpecs(
+    // 列表查询条件。
+    query: CouponTemplateQueryDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 校验权限，仅提供已上架商品下的启用规格。
     this.authorize(admin)
 
@@ -181,21 +216,35 @@ export class CouponTemplateService {
   }
 
   // 获取模板详情，供后台查看和编辑回显。
-  async detail(id: number, admin: CurrentAdmin) {
+  async detail(
+    // 当前操作的记录编号。
+    id: number,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 校验平台权限并读取完整模板。
     this.authorize(admin)
+    // 当前业务明细。
     const item = await this.find(id)
     // 2. 转换为统一展示结构，不修改已发放优惠券。
     return this.serialize(item)
   }
 
   // 新增或完整编辑模板，修改仅影响之后按该模板发放的优惠券。
-  async save(dto: SaveCouponTemplateDto, admin: CurrentAdmin, id?: number) {
+  async save(
+    // 接口请求参数。
+    dto: SaveCouponTemplateDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+    // 当前操作的记录编号。
+    id?: number,
+  ) {
     // 1. 校验平台权限，模板与关联规则在同一事务中处理。
     this.authorize(admin)
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 2. 编辑时读取原模板，检查金额、兑换规格和有效期。
       const old = id === undefined ? null : await this.find(id, tx)
+      // 校验后的业务规则。
       const rules = await this.rules(dto, old, tx)
       // 3. 赠花活动不能切换成现金券，避免破坏既有活动配置。
       if (
@@ -216,6 +265,7 @@ export class CouponTemplateService {
         enabled: dto.enabled,
         ...rules,
       }
+      // 已保存的记录。
       const saved =
         id === undefined
           ? await this.repo.createTemplate(data, tx)
@@ -226,10 +276,18 @@ export class CouponTemplateService {
   }
 
   // 单独启用或停用模板，保留已发放券和营销活动关联记录。
-  async status(id: number, enabled: boolean, admin: CurrentAdmin) {
+  async status(
+    // 当前操作的记录编号。
+    id: number,
+    // 是否启用。
+    enabled: boolean,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 校验平台权限，在事务内读取原模板。
     this.authorize(admin)
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // 修改前的记录。
       const old = await this.find(id, tx)
       // 2. 启用前重新校验规则，拒绝启用兑换商品已停售的模板。
       if (enabled)

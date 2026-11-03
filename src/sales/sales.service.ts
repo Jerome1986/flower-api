@@ -6,9 +6,11 @@ import type { StoreAccess } from '../common/types/store-access'
 import { SalesQueryDto } from './dto/sales-query.dto'
 import { SalesRepository } from './sales.repository'
 import { salesRange } from './sales.utils'
+// 销售统计业务数据类型。
 type Numeric = Prisma.Decimal | bigint | number | null
 // 将聚合结果转换为安全整数，拒绝超出精度范围的统计值。
 const integer = (value: Numeric) => {
+  // 本次处理结果。
   const result = Number(value ?? 0)
   if (!Number.isSafeInteger(result)) throw new Error('统计数值超出安全范围')
   return result
@@ -17,16 +19,24 @@ const integer = (value: Numeric) => {
 const cents = (value: Numeric) =>
   integer(new Prisma.Decimal(String(value ?? 0)).mul(100).toNumber())
 
+// 销售统计业务服务。
 @Injectable()
 export class SalesService {
   // 注入销售统计数据访问层及业务依赖。
   constructor(
+    // 业务数据访问层。
     private readonly repo: SalesRepository,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {}
 
   // 按北京时间统计门店收入、订单状态和赠花数据。
-  async summary(admin: CurrentAdmin, query: SalesQueryDto) {
+  async summary(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+    // 列表查询条件。
+    query: SalesQueryDto,
+  ) {
     // 1. 按北京时间计算自然日、近七天或本月的半开统计区间。
     const { start, end } = salesRange(query.period)
     // 同一快照读取权限与各项聚合，避免统计过程中订单更新导致口径不一致。
@@ -43,6 +53,7 @@ export class SalesService {
         )
           scope = {}
         else throw new ForbiddenException('无权查看门店统计')
+        // 门店信息。
         const store = await this.repo.findStore(query.storeId, scope, tx)
         if (!store) throw new ForbiddenException('无权查看该门店统计')
 
@@ -51,16 +62,20 @@ export class SalesService {
         // 仅整单退款成功扣除；退款中、失败仍保留原收款。零元确认不能产生收入。
 
         const [money] = await this.repo.sumRevenue(store.id, start, end, tx)
+        // 各订单状态的汇总数据。
         const states = await this.repo.countOrderStates(
           store.id,
           start,
           end,
           tx,
         )
+        // 赠花汇总结果。
         const [gifts] = await this.repo.sumGifts(store.id, start, end, tx)
         // 4. 将数据库数值转换为安全整数，金额统一输出为分。
         const amount = cents(money.amount)
+        // 销售商品份数。
         const salesCount = integer(money.salesCount)
+        // 转换后的订单状态统计。
         const mappedStates = states.map((row) => ({
           status: row.status,
           count: integer(row.count),

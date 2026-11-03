@@ -14,10 +14,16 @@ import {
 
 // 构造字符串去空白转换器，保留其他类型供字段校验。
 const Trim = () =>
-  Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim() : value,
+  Transform(
+    ({
+      value,
+    }: {
+      // 待转换或校验的值。
+      value: unknown
+    }) => (typeof value === 'string' ? value.trim() : value),
   )
 
+// 门店请求参数及校验规则。
 export class CreateStoreDto {
   /** 店长手机号：匹配已有用户或自动创建店长用户 */
   @Trim()

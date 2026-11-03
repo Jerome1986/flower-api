@@ -17,44 +17,70 @@ import { OrdersService } from './orders.service'
 import { include } from './manage-orders.repository'
 export { include } from './manage-orders.repository'
 
+// 订单业务服务。
 @Injectable()
 export class ManageOrdersService {
   // 注入订单数据访问层及业务依赖。
   constructor(
+    // 业务数据访问层。
     private readonly repo: ManageOrdersRepository,
+    // 订单业务服务。
     private readonly orders: OrdersService,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {}
 
   // 根据账号身份限定订单查询范围。
-  private scope(admin: CurrentAdmin): StoreAccess {
+  private scope(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ): StoreAccess {
+    // 1. 满足条件时提前结束本次处理。
     if (['SUPER_ADMIN', 'PLATFORM_ADMIN'].includes(admin.role)) return {}
+    // 2. 满足条件时提前结束本次处理。
     if (admin.role === 'STORE_MANAGER') return { managerId: admin.id }
+    // 3. 满足条件时提前结束本次处理。
     if (admin.role === 'STORE_ADMIN' && admin.storeId)
       return { storeId: admin.storeId }
     throw new ForbiddenException('无订单管理权限')
   }
 
   // 查询当前可访问的门店。
-  async stores(admin: CurrentAdmin) {
+  async stores(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 根据账号身份限定订单查询范围。
     this.scope(admin)
+    // 2. 返回本次处理结果。
     return this.repo.findStores(admin)
   }
 
   // 整理订单响应字段。
   private serialize(
-    order: Prisma.OrderGetPayload<{ include: typeof include }>,
+    // 当前订单信息。
+    order: Prisma.OrderGetPayload<{
+      // 关联查询配置。
+      include: typeof include
+    }>,
   ) {
     // 店员核验客户出示的码，管理接口不泄露用户取货码。
     return { ...this.orders.serialize(order), pickupCode: null }
   }
 
   // 查询订单列表。
-  async list(query: OrderQuery, admin: CurrentAdmin) {
+  async list(
+    // 列表查询条件。
+    query: OrderQuery,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 查询当前页的数据列表、汇总总数或总金额。
     const [list, total] = await this.prisma.$transaction(
       async (tx: Prisma.TransactionClient) =>
         this.repo.findPage(this.scope(admin), query, tx),
     )
+    // 2. 返回本次处理结果。
     return {
       list: list.map((item) => this.serialize(item)),
       total,
@@ -65,24 +91,44 @@ export class ManageOrdersService {
 
   // 按订单号和管理员可见范围查询订单。
   private async selected(
+    // 业务订单或交易编号。
     no: string,
+    // 当前管理员信息。
     admin: CurrentAdmin,
+    // 当前数据库事务。
     tx?: Prisma.TransactionClient,
   ) {
+    // 1. 查询当前订单信息。
     const order = await this.repo.findOrder(no, this.scope(admin), tx)
+    // 2. 不满足要求时提示：订单不存在或无访问权限。
     if (!order) throw new NotFoundException('订单不存在或无访问权限')
+    // 3. 返回本次处理结果。
     return order
   }
 
   // 查询订单详情。
-  async detail(no: string, admin: CurrentAdmin) {
+  async detail(
+    // 业务订单或交易编号。
+    no: string,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 整理订单响应字段。
     return this.serialize(await this.selected(no, admin))
   }
 
   // 校验订单状态及版本，执行履约操作。
-  async action(no: string, dto: OrderAction, admin: CurrentAdmin) {
+  async action(
+    // 业务订单或交易编号。
+    no: string,
+    // 接口请求参数。
+    dto: OrderAction,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 取消操作复用订单服务的状态校验和库存释放流程。
     if (dto.action === 'cancel') {
+      // 当前订单信息。
       const order = await this.selected(no, admin)
       if (
         order.status !== 'CANCELLED' &&
@@ -101,12 +147,15 @@ export class ManageOrdersService {
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 2. 在可见门店范围内读取订单，校验操作幂等键及编辑版本。
       const order = await this.selected(no, admin, tx)
+      // 分组或配置索引键。
       const key = `manage:${order.id}:${dto.action}`
       if (order.logs.some((log) => log.operationKey === key))
         return this.serialize(order)
       if (order.version !== dto.version)
         throw new ConflictException('订单已变化，请刷新')
+      // 当前业务状态。
       let status: OrderStatus
+      // 待保存或处理的数据。
       const data: Prisma.OrderUncheckedUpdateManyInput = {
         version: { increment: 1 },
       }
@@ -155,37 +204,45 @@ export class ManageOrdersService {
         throw new ConflictException('订单状态已变化，请刷新')
       // 4. 完成订单时消耗预留库存，并保存不可重复的库存流水。
       if (status === 'COMPLETED') {
-        const reservation = await this.repo.findReservation(order.id, tx)
-        if (!reservation || !order.item)
+        // 订单库存预留流水。
+        const reservations = await this.repo.findReservations(order.id, tx)
+        if (!reservations.length || !order.items.length)
           throw new ConflictException('订单库存预留记录缺失')
-        const stock = await this.repo.getStock(reservation.stockId, tx)
-        const quantity = order.item.quantity
-        const consumed = await this.repo.consumeStock(
-          stock.id,
-          stock.version,
-          quantity,
-          {
-            reserved: { decrement: quantity },
-            version: { increment: 1 },
-          },
-          tx,
-        )
-        if (consumed.count !== 1)
-          throw new ConflictException('库存已变化，请重试')
-        await this.repo.createInventoryLog(
-          {
-            stockId: stock.id,
-            orderId: order.id,
-            type: 'CONSUME',
-            availableBefore: stock.available,
-            availableAfter: stock.available,
-            reservedBefore: stock.reserved,
-            reservedAfter: stock.reserved - quantity,
-            reason: '订单完成消耗预留库存',
-            operationKey: `consume:${order.id}`,
-          },
-          tx,
-        )
+        // 逐项处理：当前库存预留流水。
+        for (const reservation of reservations) {
+          // 商品规格库存。
+          const stock = await this.repo.getStock(reservation.stockId, tx)
+          // 商品份数。
+          const quantity =
+            reservation.reservedAfter - reservation.reservedBefore
+          // 库存扣减结果。
+          const consumed = await this.repo.consumeStock(
+            stock.id,
+            stock.version,
+            quantity,
+            {
+              reserved: { decrement: quantity },
+              version: { increment: 1 },
+            },
+            tx,
+          )
+          if (consumed.count !== 1)
+            throw new ConflictException('库存已变化，请重试')
+          await this.repo.createInventoryLog(
+            {
+              stockId: stock.id,
+              orderId: order.id,
+              type: 'CONSUME',
+              availableBefore: stock.available,
+              availableAfter: stock.available,
+              reservedBefore: stock.reserved,
+              reservedAfter: stock.reserved - quantity,
+              reason: '订单完成消耗预留库存',
+              operationKey: `consume:${order.id}:${stock.id}`,
+            },
+            tx,
+          )
+        }
       }
       // 5. 保存操作者及状态变化日志，与订单和库存一同提交。
       await this.repo.createOrderLog(

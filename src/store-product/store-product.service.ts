@@ -17,24 +17,34 @@ import { StoreProductSettingsDto } from './dto/store-product-settings.dto'
 import { StoreProductRepository } from './store-product.repository'
 
 import { include } from './store-product.repository'
+// 门店商品业务数据类型。
 type SelectedProduct = Prisma.StoreProductGetPayload<{
+  // 关联查询配置。
   include: typeof include
 }>
 
+// 门店商品业务服务。
 @Injectable()
 export class StoreProductService {
   // 注入门店商品数据访问层及业务依赖。
   constructor(
+    // 业务数据访问层。
     private readonly repo: StoreProductRepository,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {}
 
   // 根据账号身份限定门店商品查询范围。
-  private scope(admin: CurrentAdmin): StoreAccess {
+  private scope(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ): StoreAccess {
+    // 1. 满足条件时提前结束本次处理。
     if (admin.role === 'SUPER_ADMIN' || admin.role === 'PLATFORM_ADMIN')
       return {}
     // 直接通过当前门店关联检查店长权限，不信任客户端提交的门店范围。
     if (admin.role === 'STORE_MANAGER') return { managerId: admin.id }
+    // 2. 满足条件时提前结束本次处理。
     if (admin.role === 'STORE_ADMIN' && admin.storeId)
       return { storeId: admin.storeId }
     throw new ForbiddenException('无门店商品管理权限')
@@ -42,30 +52,47 @@ export class StoreProductService {
 
   // 查询可用门店详情。
   private async store(
+    // 门店编号。
     storeId: number,
+    // 当前管理员信息。
     admin: CurrentAdmin,
+    // 当前数据库事务。
     tx?: Prisma.TransactionClient,
   ) {
+    // 1. 查询门店信息。
     const store = await this.repo.findStore(storeId, this.scope(admin), tx)
+    // 2. 不满足要求时提示：门店不存在或无访问权限。
     if (!store) throw new NotFoundException('门店不存在或无访问权限')
+    // 3. 返回本次处理结果。
     return store
   }
 
   // 按商品 ID 和管理员可见门店范围查询上架记录。
   private async selected(
+    // 当前操作的记录编号。
     id: number,
+    // 当前管理员信息。
     admin: CurrentAdmin,
+    // 当前数据库事务。
     tx?: Prisma.TransactionClient,
   ) {
+    // 1. 不满足要求时提示：请选择有效的门店商品。
     if (!Number.isInteger(id) || id <= 0 || id > 2147483647)
       throw new BadRequestException('请选择有效的门店商品')
+    // 2. 查询当前业务明细。
     const item = await this.repo.findById(id, this.scope(admin), tx)
+    // 3. 不满足要求时提示：门店商品不存在或无访问权限。
     if (!item) throw new NotFoundException('门店商品不存在或无访问权限')
+    // 4. 返回本次处理结果。
     return item
   }
 
   // 整理门店商品响应字段。
-  private serialize(item: SelectedProduct) {
+  private serialize(
+    // 当前业务明细。
+    item: SelectedProduct,
+  ) {
+    // 1. 返回本次处理结果。
     return {
       id: item.id,
       storeId: item.storeId,
@@ -84,6 +111,7 @@ export class StoreProductService {
           : null,
       },
       specs: item.product.specs.map((spec) => {
+        // 商品规格库存。
         const stock = item.stocks.find((stock) => stock.specId === spec.id)
         return {
           id: spec.id,
@@ -102,19 +130,32 @@ export class StoreProductService {
   }
 
   // 按平台、店长或旧门店账号的权限返回可管理门店。
-  stores(admin: CurrentAdmin) {
+  stores(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 返回本次处理结果。
     return this.repo.findStores(this.scope(admin))
   }
 
   // 在授权门店范围内分页查询已选商品，并合并规格与库存数据。
-  async list(query: StoreProductQueryDto, admin: CurrentAdmin) {
+  async list(
+    // 列表查询条件。
+    query: StoreProductQueryDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 准备当前账号可访问的门店范围。
     const scope = this.scope(admin)
+    // 2. 根据当前条件选择处理分支。
     if (query.storeId) await this.store(query.storeId, admin)
 
+    // 3. 查询业务明细列表、汇总总数或总金额。
     const [items, total] = await this.prisma.$transaction(
       async (tx: Prisma.TransactionClient) =>
         this.repo.findPage(scope, query, tx),
     )
+    // 4. 返回本次处理结果。
     return {
       list: items.map((item) => this.serialize(item)),
       total,
@@ -124,14 +165,23 @@ export class StoreProductService {
   }
 
   // 查询可选的已上架商品及启用规格，标记当前门店是否已添加。
-  async catalog(query: CatalogQueryDto, admin: CurrentAdmin) {
+  async catalog(
+    // 列表查询条件。
+    query: CatalogQueryDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 不满足要求时提示：请选择门店。
     if (!query.storeId) throw new BadRequestException('请选择门店')
+    // 2. 查询可用门店详情。
     await this.store(query.storeId, admin)
 
+    // 3. 查询业务明细列表、汇总总数或总金额。
     const [items, total] = await this.prisma.$transaction(
       async (tx: Prisma.TransactionClient) =>
         this.repo.findCatalogPage(query, tx),
     )
+    // 4. 返回本次处理结果。
     return {
       list: items.map((item) => ({
         id: item.id,
@@ -155,25 +205,45 @@ export class StoreProductService {
   }
 
   // 校验门店访问权限后返回商品设置和最新规格库存。
-  async detail(id: number, admin: CurrentAdmin) {
+  async detail(
+    // 当前操作的记录编号。
+    id: number,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 整理门店商品响应字段。
     return this.serialize(await this.selected(id, admin))
   }
 
   // 检查上架商品是否至少支持一种收花方式。
-  private validateSettings(dto: StoreProductSettingsDto) {
+  private validateSettings(
+    // 接口请求参数。
+    dto: StoreProductSettingsDto,
+  ) {
+    // 1. 不满足要求时提示：上架商品请至少选择一种取货方式。
     if (dto.enabled && !dto.pickupEnabled && !dto.deliveryEnabled)
       throw new BadRequestException('上架商品请至少选择一种取货方式')
   }
 
   // 在同一事务中创建门店选品及规格零库存，拒绝重复选品。
-  async create(dto: SelectStoreProductDto, admin: CurrentAdmin) {
+  async create(
+    // 接口请求参数。
+    dto: SelectStoreProductDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 检查上架商品是否至少支持一种收花方式。
     this.validateSettings(dto)
+    // 2. 执行业务处理，将失败原因交由异常分支处理。
     try {
+      // 当前业务明细。
       const item = await this.prisma.$transaction(
         async (tx: Prisma.TransactionClient) => {
+          // 门店信息。
           const store = await this.store(dto.storeId, admin, tx)
           if (!store.enabled)
             throw new BadRequestException('门店已停用，不能添加商品')
+          // 商品信息。
           const product = await this.repo.findProductWithSpecs(
             dto.productId,
             tx,
@@ -184,6 +254,7 @@ export class StoreProductService {
             !product.specs.length
           )
             throw new BadRequestException('请选择已上架且有可用规格的商品')
+          // 当前操作的目标记录。
           const selected = await this.repo.createProduct(
             {
               storeId: dto.storeId,
@@ -217,9 +288,19 @@ export class StoreProductService {
   }
 
   // 校验商品可售状态和取货方式后保存本店上下架设置。
-  async update(id: number, dto: StoreProductSettingsDto, admin: CurrentAdmin) {
+  async update(
+    // 当前操作的记录编号。
+    id: number,
+    // 接口请求参数。
+    dto: StoreProductSettingsDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 检查上架商品是否至少支持一种收花方式。
     this.validateSettings(dto)
+    // 2. 在事务中完成相关查询或更新。
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // 修改前的记录。
       const old = await this.selected(id, admin, tx)
       if (
         dto.enabled &&
@@ -236,31 +317,50 @@ export class StoreProductService {
 
   // 使用版本校验和幂等标识调整可售库存，事务内同步写入库存流水。
   async adjust(
+    // 当前操作的记录编号。
     id: number,
+    // 商品规格编号。
     specId: number,
+    // 接口请求参数。
     dto: AdjustStockDto,
+    // 当前管理员信息。
     admin: CurrentAdmin,
   ) {
+    // 1. 不满足要求时提示：请选择有效的商品规格。
     if (!Number.isInteger(specId) || specId <= 0 || specId > 2147483647)
       throw new BadRequestException('请选择有效的商品规格')
+    // 2. 不满足要求时提示：请填写库存调整原因。
     if (!dto.reason.trim()) throw new BadRequestException('请填写库存调整原因')
+    // 3. 准备业务操作幂等键。
     const operationKey = `inventory:${admin.role}:${admin.id}:${dto.operationKey}`
+    // 4. 准备业务操作原因。
     const reason = dto.reason.trim()
     // 核对幂等请求是否与已记录的商品、规格、库存和原因一致。
     const matches = (log: {
+      // 调整后的可售库存。
       availableAfter: number
+      // 业务操作原因。
       reason: string
-      stock: { storeProductId: number; specId: number }
+      // 商品规格库存。
+      stock: {
+        // 门店商品编号。
+        storeProductId: number
+        // 商品规格编号。
+        specId: number
+      }
     }) =>
       log.stock.storeProductId === id &&
       log.stock.specId === specId &&
       log.availableAfter === dto.available &&
       log.reason === reason
+    // 5. 执行业务处理，将失败原因交由异常分支处理。
     try {
       await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        // 当前业务明细。
         const item = await this.selected(id, admin, tx)
         if (!item.product.specs.some((spec) => spec.id === specId))
           throw new BadRequestException('规格不属于当前商品')
+        // 已存在的记录。
         const prior = await this.repo.findInventoryLog(operationKey, tx)
         if (prior) {
           if (!matches(prior))
@@ -272,7 +372,9 @@ export class StoreProductService {
           [{ storeProductId: id, productId: item.productId, specId }],
           tx,
         )
+        // 商品规格库存。
         const stock = await this.repo.getStock(id, specId, tx)
+        // 更新后的记录。
         const updated = await this.repo.updateStock(
           stock.id,
           dto.version,
@@ -309,17 +411,28 @@ export class StoreProductService {
       if (!prior || !matches(prior))
         throw new ConflictException('库存调整冲突，请刷新后重试')
     }
+    // 6. 校验门店访问权限后返回商品设置和最新规格库存。
     return this.detail(id, admin)
   }
 
   // 校验商品所属门店权限后分页返回库存变动及操作人信息。
-  async logs(id: number, query: StoreProductQueryDto, admin: CurrentAdmin) {
+  async logs(
+    // 当前操作的记录编号。
+    id: number,
+    // 列表查询条件。
+    query: StoreProductQueryDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
+    // 1. 按商品 ID 和管理员可见门店范围查询上架记录。
     await this.selected(id, admin)
 
+    // 2. 查询业务明细列表、汇总总数或总金额。
     const [items, total] = await this.prisma.$transaction(
       async (tx: Prisma.TransactionClient) =>
         this.repo.findLogsPage(id, query, tx),
     )
+    // 3. 返回本次处理结果。
     return {
       list: items.map((log) => ({
         id: log.id,

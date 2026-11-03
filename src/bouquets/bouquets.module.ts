@@ -10,6 +10,7 @@ import {
 } from './bouquets.controller'
 import { BouquetsRepository } from './bouquets.repository'
 import { BouquetsService } from './bouquets.service'
+// 定制花束模块依赖注册。
 @Module({
   imports: [UserAuthModule, OrdersModule],
   controllers: [

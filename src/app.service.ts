@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common'
 
+// 应用业务服务。
 @Injectable()
 export class AppService {
   // 返回根接口的固定响应文本，用于基础访问检查。

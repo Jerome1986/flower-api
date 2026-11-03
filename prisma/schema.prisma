@@ -448,6 +448,8 @@ model User {
   managedStores Store[]      @relation("StoreManager")
   /// 用户昵称
   nickname     String?       @db.VarChar(64)
+  age          Int?
+  gender       Int           @default(0)
   /// 用户头像地址
   avatar       String?       @db.VarChar(1024)
   /// 用户邀请码
@@ -701,6 +703,8 @@ model CouponEvent {
 /// 普通订单必须归属门店；定制无门店且仅配送。两类业务按 type 强制隔离。
 // 订单表：保存订单归属、金额、支付及履约状态
 model Order {
+  paymentLeaseToken String? @map("payment_lease_token") @db.VarChar(36)
+  paymentLeaseUntil DateTime? @map("payment_lease_until") @db.DateTime(3)
   /// 主键 ID
   id               Int               @id @default(autoincrement())
   /// 业务订单号
@@ -787,8 +791,8 @@ model Order {
   coupon           UserCoupon?       @relation("OrderCoupon", fields: [couponId], references: [id], onDelete: Restrict)
   /// 关联当前占用本订单的优惠券
   currentCoupon    UserCoupon?       @relation("CurrentCouponOrder")
-  /// 关联唯一商品规格明细
-  item             OrderItem?
+  /// 关联商品规格明细列表
+  items            OrderItem[]
   /// 关联微信支付尝试列表
   payments         Payment[]
   /// 关联整单退款记录
@@ -813,13 +817,15 @@ model Order {
   @@map("order")
 }
 
-/// orderId 唯一：首期每单只买一个规格；订单与明细须在同一事务内创建。
+/// 订单与全部商品明细在同一事务内创建。
 // 订单明细表：保存购买规格及价格、赠花成本快照
 model OrderItem {
   /// 主键 ID
   id                   Int         @id @default(autoincrement())
   /// 关联订单 ID
-  orderId              Int         @unique @map("order_id")
+  orderId              Int         @map("order_id")
+  productId            Int?        @map("product_id")
+  remark               String?     @db.VarChar(500)
   /// 关联商品规格 ID
   specId               Int         @map("spec_id")
   /// 商品名称快照
@@ -857,12 +863,14 @@ model OrderItem {
   /// 关联商品规格
   spec                 ProductSpec @relation(fields: [specId], references: [id], onDelete: Restrict)
   @@index([specId])
+  @@index([orderId])
   @@map("order_item")
 }
 
 /// 允许多次支付尝试，微信交易号唯一；0元确认无需支付记录。
 // 支付记录表：保存微信支付尝试及交易结果
 model Payment {
+  payerOpenId String? @map("payer_open_id") @db.VarChar(128)
   /// 主键 ID
   id            Int                  @id @default(autoincrement())
   /// 关联订单 ID
@@ -916,7 +924,7 @@ model Refund {
   /// 退款处理状态
   status           RefundStatus @default(PENDING)
   /// 关联操作管理员 ID
-  adminId          Int          @map("admin_id")
+  adminId          Int?         @map("admin_id")
   /// 失败原因
   failureReason    String?      @map("failure_reason") @db.VarChar(500)
   /// 退款重试次数
@@ -934,7 +942,7 @@ model Refund {
   /// 关联微信支付记录
   payment          Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   /// 关联操作管理员
-  admin            Admin        @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  admin            Admin?       @relation(fields: [adminId], references: [id], onDelete: Restrict)
   @@index([status, createdAt])
   @@index([paymentId])
   @@index([adminId])

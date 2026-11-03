@@ -11,25 +11,34 @@ import { BannerRepository } from './banner.repository'
 import { BannerDto } from './dto/banner.dto'
 import { SaveBannersDto } from './dto/save-banners.dto'
 
+// 轮播图业务服务。
 @Injectable()
 export class BannerService {
   // 注入数据访问层，复用平台首页配置保存轮播图。
   constructor(
+    // 业务数据访问层。
     private readonly repo: BannerRepository,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {
     // 1. 复用全局数据库连接，无需新增表。
   }
 
   // 校验轮播图管理权限。
-  private authorize(admin: CurrentAdmin) {
+  private authorize(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 仅平台管理员和超级管理员可以设置首页轮播图。
     if (!['SUPER_ADMIN', 'PLATFORM_ADMIN'].includes(admin.role))
       throw new ForbiddenException('仅平台管理员可设置轮播图')
   }
 
   // 获取已有首页内容对象，保留与轮播图无关的配置。
-  private content(value: Prisma.JsonValue | null): Prisma.JsonObject {
+  private content(
+    // 待转换或校验的值。
+    value: Prisma.JsonValue | null,
+  ): Prisma.JsonObject {
     // 1. 未配置时使用空对象，已有非对象内容拒绝覆盖。
     if (value === null) return {}
     if (typeof value !== 'object' || Array.isArray(value))
@@ -38,9 +47,13 @@ export class BannerService {
   }
 
   // 校验轮播图字段，避免保存不可用的图片地址。
-  private valid(item: unknown): item is BannerDto {
+  private valid(
+    // 当前业务明细。
+    item: unknown,
+  ): item is BannerDto {
     // 1. 校验完整展示字段及可加载的 HTTP 或站内图片地址。
     if (!item || typeof item !== 'object') return false
+    // 查询得到的记录。
     const row = item as BannerDto
     return (
       typeof row.id === 'string' &&
@@ -61,7 +74,10 @@ export class BannerService {
   }
 
   // 读取并排序轮播图，统一响应字段。
-  private banners(content: Prisma.JsonObject) {
+  private banners(
+    // 待校验或保存的配置内容。
+    content: Prisma.JsonObject,
+  ) {
     // 1. 仅读取轮播图配置，校验后输出明确字段。
     if (content.banners === undefined) return []
     if (
@@ -81,9 +97,13 @@ export class BannerService {
   }
 
   // 查询后台完整轮播图配置和编辑版本。
-  async list(admin: CurrentAdmin) {
+  async list(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 校验权限并读取平台单例配置。
     this.authorize(admin)
+    // 业务配置。
     const config = await this.repo.findConfig()
     // 2. 返回全部轮播图及更新时间，供编辑和并发校验。
     return {
@@ -93,7 +113,12 @@ export class BannerService {
   }
 
   // 保存轮播图列表，保留定制服务及其他首页配置。
-  async save(dto: SaveBannersDto, admin: CurrentAdmin) {
+  async save(
+    // 接口请求参数。
+    dto: SaveBannersDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 校验权限、数量、唯一标识和图片地址。
     this.authorize(admin)
     if (
@@ -123,9 +148,11 @@ export class BannerService {
               sortOrder: item.sortOrder,
             })),
           }
+          // 最近更新时间。
           const updatedAt = new Date(
             Math.max(Date.now(), (old?.updatedAt.getTime() ?? 0) + 1),
           )
+          // 已保存的记录。
           const saved = await this.repo.saveConfig(
             { id: 1, homeContent, updatedAt },
             { homeContent, updatedAt },

@@ -9,7 +9,9 @@ import {
 } from 'class-validator'
 import { BannerDto } from './banner.dto'
 
+// 轮播图请求参数及校验规则。
 export class SaveBannersDto {
+  // 轮播图配置列表。
   @IsArray()
   @ArrayMaxSize(20)
   @ArrayUnique((item: BannerDto) => item.id)

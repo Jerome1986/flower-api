@@ -19,33 +19,54 @@ import { StoreRepository } from './store.repository'
 
 // 门店查询统一关联店长基本资料，不读取微信标识等无关用户信息。
 type StoreWithManager = Store & {
+  // 店长用户编号。
   managerId: number | null
-  manager: { id: number; phone: string; nickname: string | null } | null
+  // 店长用户信息。
+  manager: {
+    // 记录编号。
+    id: number
+    // 手机号码。
+    phone: string
+    // 用户昵称。
+    nickname: string | null
+  } | null
 }
 
+// 门店业务服务。
 @Injectable()
 export class StoreService {
   // 注入 Prisma 服务，供门店查询及用户身份事务使用。
   constructor(
+    // 业务数据访问层。
     private readonly repo: StoreRepository,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {}
 
   // 判断当前身份是否为有权维护全部门店的平台管理员。
-  private isPlatform(admin: CurrentAdmin) {
+  private isPlatform(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 仅超级管理员和平台管理员视为平台维护身份。
     return admin.role === 'SUPER_ADMIN' || admin.role === 'PLATFORM_ADMIN'
   }
 
   // 校验平台维护权限，非平台身份直接拒绝操作。
-  private requirePlatform(admin: CurrentAdmin) {
+  private requirePlatform(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 判断当前角色，无平台权限时抛出禁止访问异常。
     if (!this.isPlatform(admin))
       throw new ForbiddenException('仅平台管理员可维护门店')
   }
 
   // 按当前登录身份构建可读取的门店范围。
-  private accessibleStoreIds(admin: CurrentAdmin): number[] | undefined {
+  private accessibleStoreIds(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ): number[] | undefined {
     // 1. 平台管理员可读取全部门店，不追加门店 ID 条件。
     if (this.isPlatform(admin)) return undefined
     // 2. 小程序店长仅可读取服务端确认的全部负责门店。
@@ -58,7 +79,10 @@ export class StoreService {
   }
 
   // 将门店及店长查询结果转换为接口展示结构。
-  private serialize(store: StoreWithManager) {
+  private serialize(
+    // 门店信息。
+    store: StoreWithManager,
+  ) {
     // 1. 显式返回允许展示的字段，并将店长资料展开为平级字段。
     return {
       id: store.id,
@@ -84,7 +108,10 @@ export class StoreService {
   }
 
   // 将提交字段转换为门店写入数据，店长关联由事务单独处理。
-  private data(dto: UpdateStoreDto) {
+  private data(
+    // 接口请求参数。
+    dto: UpdateStoreDto,
+  ) {
     // 1. 分离配送费和店长手机号，手机号不能直接写入门店字段。
     const { deliveryFee, managerPhone: _managerPhone, ...rest } = dto
     // 2. 保留普通字段，仅转换本次提交的可选字段。
@@ -108,7 +135,10 @@ export class StoreService {
   }
 
   // 将已知数据库异常转换为业务异常，其余异常原样抛出。
-  private rethrow(error: unknown): never {
+  private rethrow(
+    // 捕获的业务或数据库异常。
+    error: unknown,
+  ): never {
     // 1. 识别 Prisma 已知异常，并转换唯一冲突或记录不存在的错误。
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2002') throw new ConflictException('门店编号已存在')
@@ -119,7 +149,12 @@ export class StoreService {
   }
 
   // 在事务中按唯一手机号获取或创建店长用户，并返回用户 ID。
-  private async resolveManager(tx: Prisma.TransactionClient, phone: string) {
+  private async resolveManager(
+    // 当前数据库事务。
+    tx: Prisma.TransactionClient,
+    // 手机号码。
+    phone: string,
+  ) {
     // 1. 已有用户仅赋予店长身份，未注册则创建用户并生成邀请码。
     const user = await this.repo.saveManager(
       phone,
@@ -142,6 +177,7 @@ export class StoreService {
 
   // 以可串行化事务执行写入，遇到唯一冲突或并发事务冲突时有限重试。
   private async write<T>(
+    // 待执行的业务操作。
     action: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
     // 1. 最多尝试五次，确保门店、用户及身份变更作为整体提交或回滚。
@@ -166,7 +202,12 @@ export class StoreService {
   }
 
   // 新增门店：按手机号设置店长、自动生成编号并原子保存。
-  async create(dto: CreateStoreDto, admin: CurrentAdmin) {
+  async create(
+    // 接口请求参数。
+    dto: CreateStoreDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 确认当前账号具有平台维护权限。
     this.requirePlatform(admin)
     // 2. 开启可重试事务，将店长用户处理与门店创建放在一起。
@@ -192,7 +233,12 @@ export class StoreService {
   }
 
   // 分页查询权限范围内的门店，支持关键词与启用、营业状态筛选。
-  async findAll(query: QueryStoreDto, admin: CurrentAdmin) {
+  async findAll(
+    // 列表查询条件。
+    query: QueryStoreDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 清理关键词首尾空格，空关键词不追加模糊匹配条件。
 
     // 2. 合并身份范围、状态条件及门店资料和店长手机号搜索条件。
@@ -212,7 +258,12 @@ export class StoreService {
   }
 
   // 查询单家门店详情，并检查当前身份是否有权读取该门店。
-  async findOne(id: number, admin: CurrentAdmin) {
+  async findOne(
+    // 当前操作的记录编号。
+    id: number,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 确认当前账号拥有门店读取身份和有效门店范围。
     this.accessibleStoreIds(admin)
     // 2. 非平台身份必须命中旧账号绑定门店或店长负责门店列表。
@@ -230,7 +281,14 @@ export class StoreService {
   }
 
   // 部分编辑门店，按需更换店长并维护新旧店长身份。
-  async update(id: number, dto: UpdateStoreDto, admin: CurrentAdmin) {
+  async update(
+    // 当前操作的记录编号。
+    id: number,
+    // 接口请求参数。
+    dto: UpdateStoreDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 校验平台维护权限，拒绝没有任何更新字段的请求。
     this.requirePlatform(admin)
     if (!Object.keys(dto).length)
@@ -276,7 +334,14 @@ export class StoreService {
   }
 
   // 更新门店启用或营业状态，复用完整编辑流程的权限与事务处理。
-  async updateStatus(id: number, dto: StoreStatusDto, admin: CurrentAdmin) {
+  async updateStatus(
+    // 当前操作的记录编号。
+    id: number,
+    // 接口请求参数。
+    dto: StoreStatusDto,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 至少提交一种状态，避免执行无意义更新。
     if (dto.enabled === undefined && dto.isOpen === undefined)
       throw new BadRequestException('请提供启用或营业状态')
@@ -285,7 +350,12 @@ export class StoreService {
   }
 
   // 停用门店并设为休息，保留门店和全部历史业务关系。
-  async remove(id: number, admin: CurrentAdmin) {
+  async remove(
+    // 当前操作的记录编号。
+    id: number,
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 复用编辑流程关闭启用和营业状态，不执行物理删除。
     return this.update(id, { enabled: false, isOpen: false }, admin)
   }

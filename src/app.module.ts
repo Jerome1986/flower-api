@@ -19,7 +19,9 @@ import { ShopModule } from './shop/shop.module'
 import { StoreProductModule } from './store-product/store-product.module'
 import { StoreModule } from './store/store.module'
 import { UserAuthModule } from './user-auth/user-auth.module'
+import { CouponModule } from './coupon/coupon.module'
 
+// 应用模块依赖注册。
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -42,6 +44,7 @@ import { UserAuthModule } from './user-auth/user-auth.module'
     OrdersModule,
     BouquetsModule,
     CustomerUserModule,
+    CouponModule,
   ],
   controllers: [AppController],
   providers: [AppService],

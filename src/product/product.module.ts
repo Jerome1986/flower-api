@@ -5,6 +5,7 @@ import { ProductController } from './product.controller'
 import { ProductRepository } from './product.repository'
 import { ProductService } from './product.service'
 
+// 商品模块依赖注册。
 @Module({
   imports: [AdminModule],
   controllers: [ProductController],

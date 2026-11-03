@@ -11,27 +11,40 @@ import { SaveMarketingActivityDto } from './dto/save-marketing-activity.dto'
 import { MarketingActivityRepository } from './marketing-activity.repository'
 
 import { include } from './marketing-activity.repository'
-type Activity = Prisma.MarketingActivityGetPayload<{ include: typeof include }>
+// 营销活动业务数据类型。
+type Activity = Prisma.MarketingActivityGetPayload<{
+  // 关联查询配置。
+  include: typeof include
+}>
 
+// 营销活动业务服务。
 @Injectable()
 export class MarketingActivityService {
   // 注入数据访问层，维护两项固定活动。
   constructor(
+    // 业务数据访问层。
     private readonly repo: MarketingActivityRepository,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {
     // 1. 复用全局数据库连接。
   }
 
   // 校验活动管理权限。
-  private authorize(admin: CurrentAdmin) {
+  private authorize(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 仅平台管理员可以设置活动。
     if (!['SUPER_ADMIN', 'PLATFORM_ADMIN'].includes(admin.role))
       throw new ForbiddenException('仅平台管理员可管理活动')
   }
 
   // 转换活动和奖励券信息供后台展示。
-  private serialize(item: Activity) {
+  private serialize(
+    // 当前业务明细。
+    item: Activity,
+  ) {
     // 1. 金额转换为整数分，保留停用券的回显信息。
     const t = item.template
     return {
@@ -67,7 +80,9 @@ export class MarketingActivityService {
 
   // 校验奖励券和赠花报销设置。
   private async rules(
+    // 接口请求参数。
     dto: SaveMarketingActivityDto,
+    // 当前数据库事务。
     tx: Prisma.TransactionClient,
   ) {
     // 1. 拒绝空活动名称和非赠花活动的报销配置。
@@ -82,6 +97,7 @@ export class MarketingActivityService {
         dto.reimbursementPerUnit > 999999999999)
     )
       throw new BadRequestException('请填写有效的报销单价')
+    // 优惠券模板。
     const template = await this.repo.findTemplate(dto.templateId, tx)
     if (!template) throw new BadRequestException('请选择有效的奖励优惠券')
     // 3. 赠花必须使用兑换券，有效期沿用所选优惠券设置。
@@ -101,9 +117,13 @@ export class MarketingActivityService {
   }
 
   // 查询新人和邀请两项配置，未配置的活动由后台展示待设置入口。
-  async list(admin: CurrentAdmin) {
+  async list(
+    // 当前管理员信息。
+    admin: CurrentAdmin,
+  ) {
     // 1. 校验权限并读取活动及奖励券。
     this.authorize(admin)
+    // 业务明细列表。
     const items = await this.repo.findAll()
     // 2. 统一转换金额和奖励券摘要。
     return items.map((item) => this.serialize(item))
@@ -111,8 +131,11 @@ export class MarketingActivityService {
 
   // 保存指定触发方式的当前活动，不修改历史奖励券。
   async save(
+    // 活动触发类型。
     trigger: ActivityTrigger,
+    // 接口请求参数。
     dto: SaveMarketingActivityDto,
+    // 当前管理员信息。
     admin: CurrentAdmin,
   ) {
     // 1. 校验权限，在事务中校验奖励规则。
@@ -130,6 +153,7 @@ export class MarketingActivityService {
             ? null
             : new Prisma.Decimal(dto.reimbursementPerUnit).div(100),
       }
+      // 当前业务明细。
       const item = await this.repo.saveActivity(
         trigger,
         { trigger, ...data },
@@ -143,13 +167,17 @@ export class MarketingActivityService {
 
   // 单独启停活动，启用前重新检查关联奖励券。
   async status(
+    // 活动触发类型。
     trigger: ActivityTrigger,
+    // 是否启用。
     enabled: boolean,
+    // 当前管理员信息。
     admin: CurrentAdmin,
   ) {
     // 1. 校验权限并在事务中读取当前配置。
     this.authorize(admin)
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // 修改前的记录。
       const old = await this.repo.findByTrigger(trigger, tx)
       if (!old) throw new NotFoundException('请先设置活动奖励')
       // 2. 停用始终允许，启用时校验当前规则。

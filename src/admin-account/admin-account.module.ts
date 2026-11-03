@@ -4,6 +4,7 @@ import { AdminAuthGuard } from '../common/guards/admin-auth.guard'
 import { AdminAccountController } from './admin-account.controller'
 import { AdminAccountRepository } from './admin-account.repository'
 import { AdminAccountService } from './admin-account.service'
+// 管理员账号模块依赖注册。
 @Module({
   imports: [AdminModule],
   controllers: [AdminAccountController],

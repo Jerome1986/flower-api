@@ -5,18 +5,24 @@ import { createHash } from 'node:crypto'
 import { AdminRepository } from './admin.repository'
 import { LoginAdminDto } from './dto/login-admin.dto'
 
+// 管理员身份业务服务。
 @Injectable()
 export class AdminService {
   // 注入管理员数据访问层和 JWT 服务，供登录流程使用。
   constructor(
+    // 管理员数据访问层。
     private adminRepo: AdminRepository,
+    // 身份令牌签发服务。
     private jwtService: JwtService,
   ) {
     // 1. 复用账号查询与令牌签发服务。
   }
 
   // 管理员登录：初始化默认账号、校验身份并签发后台访问令牌。
-  async login(loginDto: LoginAdminDto) {
+  async login(
+    // 管理员登录请求参数。
+    loginDto: LoginAdminDto,
+  ) {
     // 1. 提取本次登录提交的账号与密码。
     const { username, password } = loginDto
 
@@ -52,6 +58,7 @@ export class AdminService {
 
     // 6. 记录最近登录时间，令牌绑定当前密码摘要以支持重置密码后失效。
     await this.adminRepo.recordLogin(admin.id)
+    // 身份令牌。
     const token = this.jwtService.sign({
       userId: admin.id,
       username: admin.username,

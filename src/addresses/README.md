@@ -59,3 +59,11 @@ Address 为上述结构加数字 id，regionCode 返回 string 或 null。不返
 - 当前 localhost:3000/api/user/addresses 的无令牌请求返回401，说明运行服务已加载路由。
 
 前端已接入相同协议；真机操作仍待验收。自动化真实 SQL 验证不等同于原生页面、事件通道和键盘体验的真机验收。
+
+
+## 微信地图选址
+
+小程序参照 qiansu-wx，直接调用 uni.chooseLocation 获取完整地址和地点名称。
+前端使用本地行政区划数据匹配省市区，无需后端逆地址解析或 TENCENT_MAP_KEY。
+原 resolve-location 接口及其专属服务已移除；地址增删改、默认地址接口保持不变。
+无法完整匹配时前端保留地图原文，要求用户补齐必填地区；服务端仍校验完整地址。

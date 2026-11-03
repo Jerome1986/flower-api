@@ -6,11 +6,25 @@ import { ManageOrdersService } from './manage-orders.service'
 import { OrdersController } from './orders.controller'
 import { OrdersRepository } from './orders.repository'
 import { OrdersService } from './orders.service'
+import {
+  PaymentController,
+  PaymentNotifyController,
+} from '../payment/payment.controller'
+import { PaymentService } from '../payment/payment.service'
+import { WechatPayClient } from '../payment/wechat-pay.client'
 
+// 订单模块依赖注册。
 @Module({
   imports: [UserAuthModule],
-  controllers: [OrdersController, ManageOrdersController],
+  controllers: [
+    OrdersController,
+    ManageOrdersController,
+    PaymentController,
+    PaymentNotifyController,
+  ],
   providers: [
+    PaymentService,
+    WechatPayClient,
     OrdersRepository,
     ManageOrdersRepository,
     OrdersService,

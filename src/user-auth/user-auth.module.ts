@@ -5,10 +5,10 @@ import { UserAuthGuard } from './user-auth.guard'
 import { UserAuthRepository } from './user-auth.repository'
 import { UserAuthService } from './user-auth.service'
 import { WxUtil } from '../utils/wx.util'
-import { CouponModule } from '../coupon/coupon.module'
 
+// 用户身份模块依赖注册。
 @Module({
-  imports: [AdminModule, CouponModule],
+  imports: [AdminModule],
   controllers: [UserAuthController],
   providers: [UserAuthRepository, UserAuthService, UserAuthGuard, WxUtil],
   exports: [UserAuthService, UserAuthGuard, AdminModule],

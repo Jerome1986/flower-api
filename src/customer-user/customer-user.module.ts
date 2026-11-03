@@ -5,6 +5,7 @@ import { CustomerUserController } from './customer-user.controller'
 import { CustomerUserRepository } from './customer-user.repository'
 import { CustomerUserService } from './customer-user.service'
 
+// 客户用户模块依赖注册。
 @Module({
   imports: [AdminModule],
   controllers: [CustomerUserController],

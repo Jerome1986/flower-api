@@ -3,6 +3,7 @@ import { ShopController } from './shop.controller'
 import { ShopRepository } from './shop.repository'
 import { ShopService } from './shop.service'
 
+// 商城商品模块依赖注册。
 @Module({
   controllers: [ShopController],
   providers: [ShopRepository, ShopService],

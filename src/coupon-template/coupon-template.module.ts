@@ -4,6 +4,7 @@ import { AdminAuthGuard } from '../common/guards/admin-auth.guard'
 import { CouponTemplateController } from './coupon-template.controller'
 import { CouponTemplateRepository } from './coupon-template.repository'
 import { CouponTemplateService } from './coupon-template.service'
+// 优惠券模板模块依赖注册。
 @Module({
   imports: [AdminModule],
   controllers: [CouponTemplateController],

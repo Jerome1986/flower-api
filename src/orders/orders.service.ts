@@ -1,4 +1,3 @@
-import { PrismaService } from '../prisma/prisma.service'
 import {
   BadRequestException,
   ConflictException,
@@ -8,69 +7,259 @@ import {
 import { Interval } from '@nestjs/schedule'
 import { Prisma } from '@prisma/client'
 import { randomUUID } from 'node:crypto'
+import { PrismaService } from '../prisma/prisma.service'
 import { UserAuthService } from '../user-auth/user-auth.service'
 import { CreateOrderDto } from './dto/create-order.dto'
 import { QuoteOrderDto } from './dto/quote-order.dto'
-import { OrdersRepository } from './orders.repository'
-
-import { include } from './orders.repository'
-type SavedOrder = Prisma.OrderGetPayload<{ include: typeof include }>
-// 将数据库中的元金额转换为接口使用的整数分。
+import { OrdersRepository, include } from './orders.repository'
+import { consumeCoupon, lockCoupon, returnCoupon } from './order-coupons'
+import { orderLines, allocateCoupon } from './order-lines'
+import { PaymentService } from '../payment/payment.service'
+// 订单业务数据类型。
+type SavedOrder = Prisma.OrderGetPayload<{
+  // 关联查询配置。
+  include: typeof include
+}>
+// 将元转换为整数分。
 const cents = (value: Prisma.Decimal | number) =>
   Math.round(Number(value) * 100)
+// 订单业务服务。
 @Injectable()
 export class OrdersService {
-  // 注入订单数据访问层及业务依赖。
+  // 注入本模块所需的业务依赖。
   constructor(
+    // 业务数据访问层。
     private readonly repo: OrdersRepository,
+    // 用户身份校验服务。
     private readonly users: UserAuthService,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
+    // 支付与退款业务服务。
+    private readonly payments: PaymentService,
   ) {}
 
-  // 校验门店、商品规格和可售库存，计算商品金额及配送费。
-  private async selection(dto: QuoteOrderDto, tx?: Prisma.TransactionClient) {
-    const selected = await this.repo.findAvailableProduct(dto, tx)
-    const spec = await this.repo.findAvailableSpec(dto, tx)
-    if (!selected || !spec)
-      throw new BadRequestException('门店休息、商品已下架或规格不可用')
-    if (
-      !(dto.method === 'pickup'
-        ? selected.pickupEnabled
-        : selected.deliveryEnabled)
+  // 校验所选商品、门店、规格和库存。
+  private async selection(
+    // 接口请求参数。
+    dto: QuoteOrderDto,
+    // 当前数据库事务。
+    tx?: Prisma.TransactionClient,
+  ) {
+    // 1. 规范化商品明细并准备逐项校验。
+    const inputs = orderLines(dto)
+    // 订单商品明细。
+    const lines = [] as Array<{
+      // 当前商品选择参数。
+      input: (typeof inputs)[number]
+      // 当前操作的目标记录。
+      selected: NonNullable<
+        Awaited<ReturnType<OrdersRepository['findAvailableProduct']>>
+      >
+      // 商品规格信息。
+      spec: NonNullable<
+        Awaited<ReturnType<OrdersRepository['findAvailableSpec']>>
+      >
+      // 商品规格库存。
+      stock: NonNullable<
+        Awaited<ReturnType<OrdersRepository['findAvailableProduct']>>
+      >['stocks'][number]
+      // 商品单价。
+      unitPrice: number
+      // 商品金额。
+      productAmount: number
+    }>
+    // 2. 校验门店、商品、规格、收花方式和价格。
+    for (const input of inputs) {
+      // 当前商品的查询条件。
+      const one = { storeId: dto.storeId, method: dto.method, ...input }
+      // 当前操作的目标记录。
+      const selected = await this.repo.findAvailableProduct(one, tx)
+      // 商品规格信息。
+      const spec = await this.repo.findAvailableSpec(one, tx)
+      if (!selected || !spec)
+        throw new BadRequestException('门店休息、商品已下架或规格不可用')
+      if (
+        !(dto.method === 'pickup'
+          ? selected.pickupEnabled
+          : selected.deliveryEnabled)
+      )
+        throw new BadRequestException('商品不支持此收花方式')
+      // 商品规格库存。
+      const stock = selected.stocks[0]
+      if (!stock) throw new ConflictException('商品库存不可用')
+      // 商品单价。
+      const unitPrice = cents(spec.price)
+      if (!Number.isSafeInteger(unitPrice) || unitPrice < 0)
+        throw new ConflictException('商品价格异常')
+      lines.push({
+        input,
+        selected,
+        spec,
+        stock,
+        unitPrice,
+        productAmount: unitPrice * input.quantity,
+      })
+    }
+    // 3. 按库存记录汇总预留份数并校验可售库存。
+    const reservations = new Map<
+      number,
+      {
+        // 商品规格库存。
+        stock: (typeof lines)[number]['stock']
+        // 商品份数。
+        quantity: number
+      }
+    >()
+    for (const line of lines) {
+      // 已存在的记录。
+      const prior = reservations.get(line.stock.id)
+      reservations.set(line.stock.id, {
+        stock: line.stock,
+        quantity: (prior?.quantity || 0) + line.input.quantity,
+      })
+    }
+    for (const { stock, quantity } of reservations.values())
+      if (stock.available < quantity)
+        throw new ConflictException('库存不足，请调整购物车')
+    // 4. 汇总商品金额并按门店计算一次配送费。
+    const productAmount = lines.reduce(
+      (sum, line) => sum + line.productAmount,
+      0,
     )
-      throw new BadRequestException('商品不支持此收花方式')
-    const stock = selected.stocks[0]
-    if (!stock || stock.available < dto.quantity)
-      throw new ConflictException('库存不足，请重新选择')
-    const productAmount = cents(spec.price) * dto.quantity
-    const deliveryFee =
-      dto.method === 'delivery' ? cents(selected.store.deliveryFee) : 0
+    // 门店信息。
+    const store = lines[0].selected.store
+    // 配送费用。
+    const deliveryFee = dto.method === 'delivery' ? cents(store.deliveryFee) : 0
+    if (
+      !Number.isSafeInteger(productAmount + deliveryFee) ||
+      productAmount + deliveryFee > 999999999
+    )
+      throw new BadRequestException('订单金额超过上限')
+    // 5. 返回商品、库存预留和基础报价。
     return {
-      selected,
-      spec,
-      stock,
+      lines,
+      reservations: [...reservations.values()].sort(
+        (a, b) => a.stock.id - b.stock.id,
+      ),
+      store,
       productAmount,
       deliveryFee,
-      payableAmount: productAmount + deliveryFee,
     }
   }
-
-  // 校验选择的商品并返回订单报价。
-  async quote(userId: number, dto: QuoteOrderDto) {
+  // 计算商品、配送费和优惠后的应付金额。
+  private async pricing(
+    // 用户编号。
+    userId: number,
+    // 接口请求参数。
+    dto: QuoteOrderDto,
+    // 当前数据库事务。
+    tx?: Prisma.TransactionClient,
+  ) {
+    // 1. 读取所选商品和基础报价。
+    const data = await this.selection(dto, tx)
+    // 2. 读取用户选中的优惠券并确认存在。
+    const coupon = dto.couponId
+      ? await (tx ?? this.prisma).userCoupon.findUnique({
+          where: { id: dto.couponId },
+        })
+      : null
+    if (dto.couponId && !coupon) throw new ConflictException('优惠券不存在')
+    // 3. 按订单明细分配优惠和兑换份数。
+    const allocation = allocateCoupon(
+      coupon,
+      userId,
+      data.lines.map((l) => ({ ...l.input, unitPrice: l.unitPrice })),
+    )
+    // 4. 返回商品金额、配送费和优惠后的应付金额。
+    return {
+      ...data,
+      coupon,
+      ...allocation,
+      payableAmount:
+        data.productAmount + data.deliveryFee - allocation.discountAmount,
+    }
+  }
+  // 计算订单报价。
+  async quote(
+    // 用户编号。
+    userId: number,
+    // 接口请求参数。
+    dto: QuoteOrderDto,
+  ) {
+    // 1. 校验用户状态并返回当前资料。
     await this.users.currentUser(userId)
-    const data = await this.selection(dto)
+    // 2. 准备待保存或处理的数据。
+    const data = await this.pricing(userId, dto)
+    // 3. 返回本次处理结果。
     return {
       productAmount: data.productAmount,
       deliveryFee: data.deliveryFee,
-      discountAmount: 0,
+      discountAmount: data.discountAmount,
       payableAmount: data.payableAmount,
+      items: data.lines.map((l, i) => ({
+        ...l.input,
+        productName: l.selected.product.name,
+        specName: l.spec.name,
+        unit: l.spec.unit,
+        coverImage: l.selected.product.coverImage,
+        unitPrice: l.unitPrice,
+        productAmount: l.productAmount,
+        discountAmount: data.discounts[i],
+      })),
     }
   }
-
+  // 筛选当前订单可使用的优惠券。
+  async availableCoupons(
+    // 用户编号。
+    userId: number,
+    // 接口请求参数。
+    dto: QuoteOrderDto,
+  ) {
+    // 1. 校验用户状态并返回当前资料。
+    await this.users.currentUser(userId)
+    // 2. 准备待保存或处理的数据。
+    const data = await this.selection(dto)
+    // 3. 查询用户可选优惠券列表。
+    const coupons = await this.prisma.userCoupon.findMany({
+      where: {
+        userId,
+        status: 'AVAILABLE',
+        currentOrderId: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { expiresAt: 'asc' },
+    })
+    // 4. 返回本次处理结果。
+    return coupons.filter((coupon) => {
+      try {
+        allocateCoupon(
+          coupon,
+          userId,
+          data.lines.map((l) => ({ ...l.input, unitPrice: l.unitPrice })),
+        )
+        return true
+      } catch {
+        return false
+      }
+    })
+  }
   // 整理订单响应字段。
-  serialize(order: SavedOrder) {
+  serialize(
+    // 当前订单信息。
+    order: SavedOrder,
+  ) {
+    // 支付协调字段仅供内部使用，不返回给客户端。
+    const { paymentLeaseToken, paymentLeaseUntil, ...publicOrder } = order
+    // 1. 准备业务明细列表。
+    const items = order.items.map((item) => ({
+      ...item,
+      unitPrice: cents(item.unitPrice),
+      productAmount: cents(item.productAmount),
+      discountAmount: cents(item.discountAmount),
+    }))
+    // 2. 返回本次处理结果。
     return {
-      ...order,
+      ...publicOrder,
       pickupCode:
         order.status === 'READY' && order.method === 'PICKUP'
           ? order.pickupCode
@@ -79,80 +268,122 @@ export class OrdersService {
       discountAmount: cents(order.discountAmount),
       deliveryFee: cents(order.deliveryFee),
       payableAmount: cents(order.payableAmount),
-      item: order.item && {
-        ...order.item,
-        unitPrice: cents(order.item.unitPrice),
-        productAmount: cents(order.item.productAmount),
-        discountAmount: cents(order.item.discountAmount),
-      },
+      items,
+      // 兼容历史单商品客户端，新客户端使用商品明细数组。
+      item: items[0] ?? null,
     }
   }
-
-  // 检查幂等请求的商品和履约信息是否一致。
-  private assertSame(order: SavedOrder, dto: CreateOrderDto) {
+  // 核对重复下单请求是否与原订单一致。
+  private assertSame(
+    // 当前订单信息。
+    order: SavedOrder,
+    // 接口请求参数。
+    dto: CreateOrderDto,
+  ) {
+    // 1. 准备收货地址信息。
     const address = order.addressSnapshot as Prisma.JsonObject | null
+    // 2. 准备订单商品明细。
+    const lines = orderLines(dto)
+    // 嵌套写入的返回顺序可能不同，排序后比较完整商品明细。
+    const expected = lines
+      .map((line) =>
+        JSON.stringify([
+          line.productId,
+          line.specId,
+          line.quantity,
+          line.remark || '',
+        ]),
+      )
+      .sort()
+    // 3. 准备已保存的记录。
+    const saved = order.items
+      .map((item) =>
+        JSON.stringify([
+          item.productId ??
+            (order.serviceSnapshot as Prisma.JsonObject)?.productId,
+          item.specId,
+          item.quantity,
+          item.remark || '',
+        ]),
+      )
+      .sort()
+    // 4. 准备提交内容是否与原订单一致。
+    const same = JSON.stringify(expected) === JSON.stringify(saved)
+    // 5. 不满足要求时提示：重复提交的内容已变化。
     if (
+      !same ||
       order.type !== 'ORDINARY' ||
-      (order.serviceSnapshot as Prisma.JsonObject)?.productId !==
-        dto.productId ||
+      (order.couponId ?? null) !== (dto.couponId ?? null) ||
       order.storeId !== dto.storeId ||
-      order.item?.specId !== dto.specId ||
-      order.item?.quantity !== dto.quantity ||
       order.method !== (dto.method === 'pickup' ? 'PICKUP' : 'DELIVERY') ||
       order.contactName !== dto.contactName.trim() ||
       order.contactPhone !== dto.contactPhone ||
       (address?.detail ?? '') !==
-        (dto.method === 'delivery' ? (dto.address?.trim() ?? '') : '') ||
-      (order.remark ?? '') !== (dto.remark?.trim() ?? '') ||
+        (dto.method === 'delivery' ? dto.address?.trim() || '' : '') ||
+      (order.remark || '') !== (dto.remark?.trim() || '') ||
       cents(order.payableAmount) !== dto.expectedAmount
     )
       throw new ConflictException('重复提交的内容已变化，请重新进入结算页')
+    // 6. 返回本次处理结果。
     return this.serialize(order)
   }
-
-  // 新增订单。
-  async create(userId: number, dto: CreateOrderDto) {
-    // 1. 检查用户可用状态、联系人和配送地址。
+  // 创建订单记录。
+  async create(
+    // 用户编号。
+    userId: number,
+    // 接口请求参数。
+    dto: CreateOrderDto,
+  ) {
+    // 1. 校验用户身份、商品明细和联系人信息。
     await this.users.currentUser(userId)
+    orderLines(dto)
     if (!dto.contactName.trim()) throw new BadRequestException('请填写联系人')
     if (dto.method === 'delivery' && !dto.address?.trim())
       throw new BadRequestException('请填写配送地址')
     try {
       return await this.prisma.$transaction(
         async (tx: Prisma.TransactionClient) => {
-          // 2. 在同一事务中检查幂等键，重复请求复用原订单。
+          // 已存在的记录。
+          // 2. 在事务中按请求幂等键复用内容一致的订单。
           const prior = await this.repo.findByRequestKey(
             userId,
             dto.requestKey,
             tx,
           )
           if (prior) return this.assertSame(prior, dto)
-          const {
-            selected,
-            spec,
-            stock,
-            productAmount,
-            deliveryFee,
-            payableAmount,
-          } = await this.selection(dto, tx)
-          if (dto.expectedAmount !== payableAmount)
+          // 待保存或处理的数据。
+          // 3. 重新核算服务端金额并与用户确认金额比较。
+          const data = await this.pricing(userId, dto, tx)
+          if (dto.expectedAmount !== data.payableAmount)
             throw new ConflictException('价格或配送费已变化，请刷新金额后确认')
-          // 3. 通过库存版本和可用数量预留库存，冲突时回滚订单创建。
-          const reserved = await this.repo.reserveStock(
-            stock.id,
-            dto.quantity,
-            stock.version,
-            {
-              available: { decrement: dto.quantity },
-              reserved: { increment: dto.quantity },
-              version: { increment: 1 },
-            },
-            tx,
-          )
-          if (reserved.count !== 1)
-            throw new ConflictException('库存已变化，请重新提交')
-          const store = selected.store
-          // 4. 保存下单时的商品、门店和配送快照及初始订单日志。
+          // 逐项处理：商品规格库存、商品份数。
+          // 4. 按库存版本预留每个规格的商品数量。
+          for (const { stock, quantity } of data.reservations) {
+            // 条件更新的影响行数。
+            const changed = await this.repo.reserveStock(
+              stock.id,
+              quantity,
+              stock.version,
+              {
+                available: { decrement: quantity },
+                reserved: { increment: quantity },
+                version: { increment: 1 },
+              },
+              tx,
+            )
+            if (changed.count !== 1)
+              throw new ConflictException('库存已变化，请重新提交')
+          }
+          // 用户优惠券信息、门店信息。
+          const { coupon, store } = data
+          // 订单是否无需支付。
+          const zero = data.payableAmount === 0
+          // 当前业务状态。
+          const status = zero ? 'PENDING_ACCEPTANCE' : 'PENDING_PAYMENT'
+          // 订单支付状态。
+          const paymentStatus = zero ? 'NOT_REQUIRED' : 'PENDING'
+          // 当前订单信息。
+          // 5. 保存订单、商品明细和优惠券快照。
           const order = await this.repo.createOrder(
             {
               orderNo: `ORD${randomUUID().replace(/-/g, '')}`,
@@ -161,9 +392,8 @@ export class OrdersService {
               type: 'ORDINARY',
               storeId: store.id,
               method: dto.method === 'pickup' ? 'PICKUP' : 'DELIVERY',
-              // TODO(payment): 接入支付后改为 PENDING_PAYMENT，并由支付成功回调确认订单。
-              status: 'PENDING_ACCEPTANCE',
-              paymentStatus: 'NOT_REQUIRED',
+              status,
+              paymentStatus,
               contactName: dto.contactName.trim(),
               contactPhone: dto.contactPhone,
               ...(dto.method === 'delivery'
@@ -177,116 +407,214 @@ export class OrdersService {
                 hours: store.businessHours,
               },
               serviceSnapshot: {
-                productId: dto.productId,
                 deliveryArea: store.deliveryArea,
-                deliveryFee,
+                deliveryFee: data.deliveryFee,
               },
               remark: dto.remark?.trim(),
-              productAmount: productAmount / 100,
-              deliveryFee: deliveryFee / 100,
-              payableAmount: payableAmount / 100,
+              productAmount: data.productAmount / 100,
+              discountAmount: data.discountAmount / 100,
+              deliveryFee: data.deliveryFee / 100,
+              payableAmount: data.payableAmount / 100,
+              ...(zero ? { confirmedAt: new Date() } : {}),
               expiresAt: new Date(Date.now() + 30 * 60 * 1000),
-              item: {
-                create: {
-                  specId: spec.id,
-                  productName: selected.product.name,
-                  categoryName: selected.product.category?.name,
-                  coverImage: selected.product.coverImage,
-                  specName: spec.name,
-                  unit: spec.unit,
-                  unitPrice: spec.price,
-                  quantity: dto.quantity,
-                  stemsPerUnit: spec.stemsPerUnit,
-                  productAmount: productAmount / 100,
-                },
+              ...(coupon
+                ? {
+                    couponId: coupon.id,
+                    couponSnapshot: {
+                      id: coupon.id,
+                      name: coupon.name,
+                      type: coupon.type,
+                      scope: coupon.scope,
+                      cashAmount: coupon.cashAmount?.toString() ?? null,
+                      exchangeSpecId: coupon.exchangeSpecId,
+                      exchangeQuantity: coupon.exchangeQuantity,
+                      activityId: coupon.activityId,
+                      activityName: coupon.activityName,
+                      isFlowerGift: coupon.isFlowerGift,
+                    },
+                  }
+                : {}),
+              items: {
+                create: data.lines.map((line, i) => {
+                  // 优惠券兑换份数。
+                  const exchangeQuantity = data.exchanges[i]
+                  // 活动赠花份数。
+                  const giftQuantity = coupon?.isFlowerGift
+                    ? exchangeQuantity
+                    : 0
+                  return {
+                    productId: line.input.productId,
+                    specId: line.spec.id,
+                    productName: line.selected.product.name,
+                    categoryName: line.selected.product.category?.name,
+                    coverImage: line.selected.product.coverImage,
+                    specName: line.spec.name,
+                    unit: line.spec.unit,
+                    unitPrice: line.spec.price,
+                    quantity: line.input.quantity,
+                    remark: line.input.remark,
+                    stemsPerUnit: line.spec.stemsPerUnit,
+                    productAmount: line.productAmount / 100,
+                    discountAmount: data.discounts[i] / 100,
+                    exchangeQuantity,
+                    giftQuantity,
+                    giftStems:
+                      giftQuantity && line.spec.stemsPerUnit != null
+                        ? giftQuantity * line.spec.stemsPerUnit
+                        : null,
+                    reimbursementPerUnit: giftQuantity
+                      ? coupon?.reimbursementPerUnit
+                      : null,
+                    reimbursementAmount:
+                      giftQuantity && coupon?.reimbursementPerUnit != null
+                        ? coupon.reimbursementPerUnit.mul(giftQuantity)
+                        : null,
+                  }
+                }),
               },
               logs: {
                 create: {
                   actorType: 'USER',
                   actorId: userId,
                   action: 'CREATE',
-                  toStatus: 'PENDING_ACCEPTANCE',
-                  toPaymentStatus: 'NOT_REQUIRED',
+                  toStatus: status,
+                  toPaymentStatus: paymentStatus,
                   operationKey: `create:${userId}:${dto.requestKey}`,
-                  remark: '订单已创建，等待门店接单',
+                  remark: zero
+                    ? '零元订单已确认，等待门店接单'
+                    : '订单已创建，等待支付',
                 },
               },
             },
             tx,
           )
-          // 5. 保存库存预留流水，和订单一起提交或回滚。
-          await this.repo.createInventoryLog(
-            {
-              stockId: stock.id,
-              orderId: order.id,
-              type: 'RESERVE',
-              availableBefore: stock.available,
-              availableAfter: stock.available - dto.quantity,
-              reservedBefore: stock.reserved,
-              reservedAfter: stock.reserved + dto.quantity,
-              reason: '订单创建预留库存',
-              operationKey: `reserve:${order.id}`,
-            },
-            tx,
-          )
+          // 6. 零元订单直接核销券，其余订单先锁定优惠券。
+          if (coupon) {
+            if (zero) await consumeCoupon(tx, coupon, userId, order.id)
+            else await lockCoupon(tx, coupon, userId, order.id)
+          }
+          // 逐项处理：商品规格库存、商品份数。
+          for (const { stock, quantity } of data.reservations)
+            // 7. 记录库存预留流水，供取消和履约使用。
+            await this.repo.createInventoryLog(
+              {
+                stockId: stock.id,
+                orderId: order.id,
+                type: 'RESERVE',
+                availableBefore: stock.available,
+                availableAfter: stock.available - quantity,
+                reservedBefore: stock.reserved,
+                reservedAfter: stock.reserved + quantity,
+                reason: '订单创建预留库存',
+                operationKey: `reserve:${order.id}:${stock.id}`,
+              },
+              tx,
+            )
           return this.serialize(order)
         },
       )
     } catch (error) {
-      // 6. 并发提交成功后复用已存在的订单，其他异常继续抛出。
       if (
         error instanceof ConflictException ||
         (error instanceof Prisma.PrismaClientKnownRequestError &&
           error.code === 'P2002')
       ) {
+        // 已存在的记录。
         const prior = await this.repo.findByRequestKey(userId, dto.requestKey)
         if (prior) return this.assertSame(prior, dto)
       }
       throw error
     }
   }
-
   // 查询订单列表。
-  async list(userId: number) {
+  async list(
+    // 用户编号。
+    userId: number,
+  ) {
+    // 1. 校验用户状态并返回当前资料。
     await this.users.currentUser(userId)
-    const orders = await this.repo.findByUserId(userId)
-    return orders.map((order) => this.serialize(order))
+    // 2. 返回本次处理结果。
+    return (await this.repo.findByUserId(userId)).map((order) =>
+      this.serialize(order),
+    )
   }
-
   // 查询订单详情。
-  async detail(userId: number, orderNo: string) {
+  async detail(
+    // 用户编号。
+    userId: number,
+    // 业务订单编号。
+    orderNo: string,
+  ) {
+    // 1. 校验用户身份并只读取本人订单。
     await this.users.currentUser(userId)
+    // 当前订单信息。
     const order = await this.repo.findUserOrder(userId, orderNo)
     if (!order) throw new NotFoundException('订单不存在')
+    // 2. 待支付订单尝试限频查单，并返回最新状态。
+    if (order.paymentStatus === 'PENDING') {
+      try {
+        await this.payments.sync(order.id, true)
+      } catch {
+        /* 查单异常交由定时任务重试，详情仍可读取。 */
+      }
+      return this.serialize(await this.repo.getById(order.id))
+    }
+    // 3. 整理订单金额和可见字段后返回。
     return this.serialize(order)
   }
-
-  // 取消订单并在同一事务中释放预留库存。
+  // 按付款状态取消订单并处理库存和退款。
   async cancel(
+    // 用户编号。
     userId: number,
+    // 业务订单编号。
     orderNo: string,
+    // 是否由超时关闭触发。
     expired = false,
-    operator?: { id: number; role: string; version?: number },
+    // 发起操作的管理员或店长。
+    operator?: {
+      // 记录编号。
+      id: number
+      // 账号角色。
+      role: string
+      // 并发更新版本号。
+      version?: number
+    },
   ) {
-    // 1. 用户主动取消时校验身份，后台操作和超时关闭沿用各自入口校验。
+    // 1. 根据当前条件选择处理分支。
     if (!expired && !operator) await this.users.currentUser(userId)
+    // 2. 查询当前操作的目标记录。
+    const selected = await this.repo.findUserOrder(userId, orderNo)
+    // 3. 不满足要求时提示：订单不存在。
+    if (!selected) throw new NotFoundException('订单不存在')
+    // 4. 满足条件时提前结束本次处理。
+    if (selected.type === 'ORDINARY' && cents(selected.payableAmount) > 0)
+      return this.serialize(
+        await this.payments.cancel(userId, orderNo, expired, operator),
+      )
+    // 5. 在事务中完成相关查询或更新。
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // 当前订单信息。
       const order = await this.repo.findUserOrder(userId, orderNo, tx)
       if (!order) throw new NotFoundException('订单不存在')
-      if (order.status === 'CANCELLED' || order.status === 'CLOSED')
+      if (['CANCELLED', 'CLOSED'].includes(order.status))
         return this.serialize(order)
       if (operator?.version !== undefined && operator.version !== order.version)
         throw new ConflictException('订单已变化，请刷新')
-      const allowed =
-        order.type === 'CUSTOM'
+      // 允许的业务状态。
+      const allowed = expired
+        ? ['PENDING_PAYMENT']
+        : order.type === 'CUSTOM'
           ? ['PENDING_DISPATCH']
           : operator
-            ? ['PENDING_ACCEPTANCE', 'ACCEPTED', 'READY']
-            : ['PENDING_ACCEPTANCE']
-      if (!allowed.includes(order.status))
-        throw new ConflictException('当前订单不能取消')
-      // 2. 按原状态及版本更新订单，避免并发履约和取消同时成功。
-      const result = await this.repo.cancelOrder(
+            ? ['PENDING_PAYMENT', 'PENDING_ACCEPTANCE', 'ACCEPTED', 'READY']
+            : ['PENDING_PAYMENT', 'PENDING_ACCEPTANCE']
+      if (
+        !allowed.includes(order.status) ||
+        (expired && order.expiresAt > new Date())
+      )
+        throw new ConflictException('当前订单不能取消或关闭')
+      // 条件更新的影响行数。
+      const changed = await this.repo.cancelOrder(
         order.id,
         order.status,
         order.version,
@@ -299,41 +627,51 @@ export class OrdersService {
         },
         tx,
       )
-      if (result.count !== 1)
+      if (changed.count !== 1)
         throw new ConflictException('订单状态已变化，请刷新')
-      const reservation = await this.repo.findReservation(order.id, tx)
-      if (order.type === 'ORDINARY' && (!reservation || !order.item))
-        throw new ConflictException('订单库存预留记录缺失，请联系管理员')
-      if (order.type === 'ORDINARY' && reservation && order.item) {
-        const stock = await this.repo.getStock(reservation.stockId, tx)
-        const quantity = order.item.quantity
-        const released = await this.repo.releaseStock(
-          stock.id,
-          stock.version,
-          quantity,
-          {
-            available: { increment: quantity },
-            reserved: { decrement: quantity },
-            version: { increment: 1 },
-          },
-          tx,
-        )
-        if (released.count !== 1)
-          throw new ConflictException('库存已变化，请重试')
-        await this.repo.createInventoryLog(
-          {
-            stockId: stock.id,
-            orderId: order.id,
-            type: 'RELEASE',
-            availableBefore: stock.available,
-            availableAfter: stock.available + quantity,
-            reservedBefore: stock.reserved,
-            reservedAfter: stock.reserved - quantity,
-            reason: expired ? '订单超时释放库存' : '取消订单释放库存',
-            operationKey: `release:${order.id}`,
-          },
-          tx,
-        )
+      if (order.couponId)
+        await returnCoupon(tx, order.couponId, userId, order.id)
+      if (order.type === 'ORDINARY') {
+        // 订单库存预留流水。
+        const reservations = await this.repo.findReservations(order.id, tx)
+        if (!reservations.length || !order.items.length)
+          throw new ConflictException('订单库存预留记录缺失')
+        // 逐项处理：当前库存预留流水。
+        for (const reservation of reservations) {
+          // 商品份数。
+          const quantity =
+            reservation.reservedAfter - reservation.reservedBefore
+          // 商品规格库存。
+          const stock = await this.repo.getStock(reservation.stockId, tx)
+          // 库存释放结果。
+          const released = await this.repo.releaseStock(
+            stock.id,
+            stock.version,
+            quantity,
+            {
+              available: { increment: quantity },
+              reserved: { decrement: quantity },
+              version: { increment: 1 },
+            },
+            tx,
+          )
+          if (released.count !== 1)
+            throw new ConflictException('库存已变化，请重试')
+          await this.repo.createInventoryLog(
+            {
+              stockId: stock.id,
+              orderId: order.id,
+              type: 'RELEASE',
+              availableBefore: stock.available,
+              availableAfter: stock.available + quantity,
+              reservedBefore: stock.reserved,
+              reservedAfter: stock.reserved - quantity,
+              reason: expired ? '订单超时释放库存' : '取消订单释放库存',
+              operationKey: `release:${order.id}:${stock.id}`,
+            },
+            tx,
+          )
+        }
       }
       await this.repo.createOrderLog(
         {
@@ -358,16 +696,15 @@ export class OrdersService {
       return this.serialize(await this.repo.getById(order.id, tx))
     })
   }
-
-  // 定时关闭超时未支付订单。
+  // 关闭超时未支付订单并释放预留资源。
   @Interval(60000)
   async closeExpired() {
-    const orders = await this.repo.findExpiredOrders()
-    for (const order of orders) {
+    // 1. 逐项处理当前业务记录。
+    for (const order of await this.repo.findExpiredOrders()) {
       try {
         await this.cancel(order.userId, order.orderNo, true)
       } catch {
-        /* 下轮重试并发冲突，不影响其他订单。 */
+        /* 并发冲突由下一轮定时任务重试。 */
       }
     }
   }

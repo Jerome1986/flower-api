@@ -11,21 +11,28 @@ import { testPhones } from './user-auth.constants'
 import { UserAuthRepository } from './user-auth.repository'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
-import { CouponGrantService } from '../coupon/coupon-grant.service'
+import { UpdateProfileDto } from './dto/update-profile.dto'
 
+// 用户身份业务服务。
 @Injectable()
 export class UserAuthService {
   // 注入用户身份数据访问层及业务依赖。
   constructor(
+    // 业务数据访问层。
     private readonly repo: UserAuthRepository,
+    // 身份令牌服务。
     private readonly jwt: JwtService,
+    // 微信登录接口工具。
     private readonly wxUtil: WxUtil,
+    // 数据库访问服务。
     private readonly prisma: PrismaService,
-    private readonly couponGrant: CouponGrantService,
   ) {}
 
   // 校验测试登录资格并签发用户令牌。
-  async testLogin(phone: string) {
+  async testLogin(
+    // 手机号码。
+    phone: string,
+  ) {
     // 1. 测试登录仅限非生产环境中预设的手机号。
     if (process.env.NODE_ENV === 'production')
       throw new ForbiddenException('正式环境不开放测试登录')
@@ -46,7 +53,11 @@ export class UserAuthService {
   }
 
   // 微信手机号登录
-  async wxLogin(dto: WxPhoneLoginDto) {
+  async wxLogin(
+    // 接口请求参数。
+    dto: WxPhoneLoginDto,
+  ) {
+    // 业务编号或错误码、微信手机号授权凭证、邀请人邀请码。
     const { code, phoneCode, inviterCode } = dto
     // 1. 获取 openId
     const { openid } = await this.wxUtil.getSession(code)
@@ -63,13 +74,14 @@ export class UserAuthService {
           // 再查一次，避免已注册用户进入新人奖励流程。
           const existing = await this.repo.findUser(openid, phone, tx)
           if (existing) return existing
+          // 邀请人信息。
           const inviter = inviterCode
             ? await this.repo.inviterUser(inviterCode, tx)
             : null
           if (inviterCode && !inviter)
             throw new BadRequestException('邀请码无效')
 
-          // 创建用户、邀请关系、优惠券和发券流水使用同一事务。
+          // 创建用户和邀请关系使用同一事务，新人花礼由用户另行领取。
           const created = await this.repo.createUser(
             {
               openid,
@@ -79,7 +91,6 @@ export class UserAuthService {
             },
             tx,
           )
-          await this.couponGrant.grantNewUser(created.id, tx)
           return created
         },
       )
@@ -87,7 +98,7 @@ export class UserAuthService {
 
     // 直接登录的用户需要检查是否有openid,如果没有要重新补充openid,防止后端同时创建店长+用户的操作
     if (user && !user.openId) {
-      await this.repo.updateOpenid(user.id, openid)
+      user = await this.repo.updateOpenid(user.id, openid)
     }
 
     // 6.生成 token（带角色）
@@ -104,10 +115,33 @@ export class UserAuthService {
   }
 
   // 查询当前用户并检查账号可用状态。
-  async currentUser(id: number) {
+  async updateProfile(
+    // 当前操作的记录编号。
+    id: number,
+    // 接口请求参数。
+    dto: UpdateProfileDto,
+  ) {
+    // 1. 校验用户状态并返回当前资料。
+    await this.currentUser(id)
+    // 2. 保存当前用户的资料。
+    return this.repo.updateProfile(id, {
+      nickname: dto.nickname,
+      age: dto.age,
+      gender: dto.gender,
+    })
+  }
+
+  // 校验用户状态并返回当前资料。
+  async currentUser(
+    // 当前操作的记录编号。
+    id: number,
+  ) {
+    // 1. 查询当前用户信息。
     const user = await this.repo.findById(id)
+    // 2. 不满足要求时提示：账号不可用。
     if (!user?.enabled)
       throw new UnauthorizedException('账号不可用，请重新登录')
+    // 3. 返回本次处理结果。
     return user
   }
 }
