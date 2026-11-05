@@ -6,7 +6,6 @@ import {
   Post,
   Req,
   UseGuards,
-  UseFilters,
 } from '@nestjs/common'
 import { Type } from 'class-transformer'
 import {
@@ -16,15 +15,12 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator'
-import { RawResponse } from '../common/decorators/raw-response.decorator'
 import { CreateOrderDto } from '../orders/dto/create-order.dto'
 import { OrdersService } from '../orders/orders.service'
 import { UserAuthGuard } from '../user-auth/user-auth.guard'
 import { UserAuthService } from '../user-auth/user-auth.service'
 import type { UserRequest } from '../user-auth/user-auth.types'
 import { PaymentService } from './payment.service'
-import { WechatPayClient, WxRefund, WxTransaction } from './wechat-pay.client'
-import { PaymentNotifyFilter } from './payment-notify.filter'
 
 // 新建支付请求参数。
 export class PaymentSubmission extends CreateOrderDto {
@@ -128,42 +124,4 @@ export class PaymentController {
   }
 }
 // 微信支付接口入口。
-@Controller('notify')
-@RawResponse()
-@UseFilters(PaymentNotifyFilter)
-export class PaymentNotifyController {
-  // 注入本模块所需的业务依赖。
-  constructor(
-    // 支付与退款业务服务。
-    private readonly payments: PaymentService,
-    // 微信支付客户端。
-    private readonly wx: WechatPayClient,
-  ) {}
-  // 解密并处理微信支付成功通知。
-  @Post('wxPay')
-  @HttpCode(204)
-  async pay(
-    // 微信回调请求体。
-    @Body() body: unknown,
-  ) {
-    // 1. 确认收款并同步订单、优惠券和支付流水。
-    await this.payments.paid(
-      this.wx.notification<WxTransaction>(body, 'TRANSACTION.SUCCESS'),
-    )
-  }
-  // 解密并处理微信退款通知。
-  @Post('wxRefund')
-  @HttpCode(204)
-  async refund(
-    // 微信回调请求体。
-    @Body() body: unknown,
-  ) {
-    // 1. 准备本次处理结果。
-    const result = this.wx.notification<WxRefund>(body, 'REFUND.')
-    // 2. 不满足要求时提示：退款商户不匹配。
-    if (result.mchid !== this.wx.config().MCH_ID)
-      throw new BadRequestException('退款商户不匹配')
-    // 3. 核对退款结果并完成订单取消。
-    await this.payments.refunded(result)
-  }
-}
+export { NotifyController as PaymentNotifyController } from '../notify/notify.controller'

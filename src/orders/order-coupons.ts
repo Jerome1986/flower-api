@@ -44,7 +44,7 @@ export function couponDiscount(
   return unitPrice * coupon.exchangeQuantity!
 }
 
-// 核销零元订单使用的优惠券。
+// 核销确认履约订单使用的优惠券。
 export async function consumeCoupon(
   // 当前数据库事务。
   tx: Prisma.TransactionClient,
@@ -54,6 +54,8 @@ export async function consumeCoupon(
   userId: number,
   // 订单编号。
   orderId: number,
+  // 不同确认流程使用各自的流水说明。
+  remark = '零元订单确认用券',
 ) {
   // 1. 记录更新结果：本次处理结果。
   const result = await tx.userCoupon.updateMany({
@@ -76,7 +78,7 @@ export async function consumeCoupon(
       orderId,
       type: 'USED',
       operationKey: `used:${orderId}`,
-      remark: '零元订单确认用券',
+      remark,
     },
   })
 }

@@ -142,7 +142,7 @@ function fixture() {
   }
   tx.payment = prisma.payment = { findFirst: async () => null, updateMany: async () => ({ count: 0 }) }
   tx.orderLog = { create: async ({ data }: any) => { state.logs.push(data) }, findUnique: async ({ where }: any) => state.logs.find((l: any) => l.operationKey === where.operationKey) }
-  const payments = new PaymentService(prisma, {} as any, repo)
+  const payments = new PaymentService(prisma, {} as any, repo, {} as any)
   const service = new OrdersService(repo, { currentUser: async () => ({ id: 1 }) } as any, prisma, payments)
   const input: any = {
     storeId: 2,

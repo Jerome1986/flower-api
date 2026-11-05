@@ -1,29 +1,30 @@
-import { createCipheriv, generateKeyPairSync, verify } from 'node:crypto'
+import { createCipheriv, generateKeyPairSync, verify, sign } from 'node:crypto'
 import axios from 'axios'
 import { WechatPayClient, WxApiError } from './wechat-pay.client'
 jest.mock('axios')
 
 describe('微信 V3 加密与商户签名边界', () => {
-  test('微信错误响应按业务错误码处理，不依赖微信公钥', async () => {
+  test('微信错误响应必须验签；缺签名不能成为可信错误状态', async () => {
     const request = axios.request as jest.Mock
     request.mockResolvedValue({
       status: 404,
       data: '{"code":"ORDER_NOT_EXIST"}',
-      headers: {},
+      headers: headers('{"code":"ORDER_NOT_EXIST"}'),
     })
-    await expect(client.request('GET', '/v3/test')).rejects.toBeInstanceOf(
-      WxApiError,
-    )
+    await expect(client.request('GET', '/v3/test')).rejects.toBeInstanceOf(WxApiError)
     request.mockResolvedValue({
       status: 404,
       data: '{"code":"ORDER_NOT_EXIST"}',
       headers: { 'wechatpay-signature': 'bad' },
     })
-    await expect(client.request('GET', '/v3/test')).rejects.toBeInstanceOf(
-      WxApiError,
-    )
+    await expect(client.request('GET', '/v3/test')).rejects.toThrow('签名验证失败')
   })
   const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const headers = (body: string) => {
+    const timestamp = String(Math.floor(Date.now() / 1000)), nonce = 'nonce'
+    return { 'wechatpay-timestamp': timestamp, 'wechatpay-nonce': nonce, 'wechatpay-serial': 'key-id',
+      'wechatpay-signature': sign('RSA-SHA256', Buffer.from(`${timestamp}\n${nonce}\n${body}\n`), keys.privateKey).toString('base64') }
+  }
   const cfg = {
     APPID: 'app',
     MCH_ID: 'merchant',
@@ -33,6 +34,8 @@ describe('微信 V3 加密与商户签名边界', () => {
   }
   let client: WechatPayClient
   beforeEach(() => {
+    process.env.WECHATPAY_PUBLIC_KEY_ID = 'key-id'
+    process.env.WECHATPAY_PUBLIC_KEY = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString()
     client = new WechatPayClient()
     jest.spyOn(client, 'config').mockReturnValue(cfg as any)
   })
@@ -94,12 +97,23 @@ describe('微信 V3 加密与商户签名边界', () => {
           Buffer.from(signature, 'base64'),
         ),
       ).toBe(true)
-      return { status: 204, data: '', headers: {} }
+      expect(options.proxy).toBe(false)
+      return { status: 204, data: '', headers: headers('') }
     })
     await expect(
       client.request('POST', '/v3/test', { text: '花' }),
     ).resolves.toEqual({})
-    request.mockResolvedValue({ status: 200, data: '{}', headers: {} })
+    request.mockResolvedValue({ status: 200, data: '{}', headers: headers('{}') })
     await expect(client.request('GET', '/v3/test')).resolves.toEqual({})
+  })
+  test('原始报文签名、时间、公钥编号和缺失头严格校验', () => {
+    const raw = '{ "event": "test" }'
+    const valid = headers(raw)
+    expect(() => client.verifyMessage(Buffer.from(raw), valid)).not.toThrow()
+    expect(() => client.verifyMessage(raw + ' ', valid)).toThrow('签名验证失败')
+    expect(() => client.verifyMessage(raw, { ...valid, 'wechatpay-serial': 'unknown' })).toThrow('签名验证失败')
+    expect(() => client.verifyMessage(raw, { ...valid, 'wechatpay-timestamp': '1000000000' })).toThrow('签名验证失败')
+    expect(() => client.verifyMessage(undefined, valid)).toThrow('签名验证失败')
+    expect(() => client.verifyMessage(raw, {})).toThrow('签名验证失败')
   })
 })

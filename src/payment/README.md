@@ -1,6 +1,6 @@
 # 微信支付与整单原路退款
 
-普通商户微信 V3、小程序 JSAPI 支付。参考 jel 的签名流程，商户私钥默认由 `src/utils/wechat-pay.ts` 的 `getPrivateKey()` 提供，也可通过环境变量指定文件覆盖。定制订单继续使用原有人工履约流程。
+普通商户微信 V3、小程序 JSAPI 支付。普通及定制花束均支持待支付、原单续付、服务端支付确认；定制收款后进入待派单。按 jel 写法由 PaymentRepository.wxPay、WechatSign 和 createWechatPay 编排下单。用户只需填写环境变量及 `src/utils/wechat-pay.ts` 中留空的 `getPrivateKey()`，不要提交真实私钥。
 
 ## 配置与部署
 
@@ -12,11 +12,13 @@
 | `MCH_ID`                      | 微信支付商户号                                                            |
 | `SERIALNO`                    | 商户 API 证书序列号，用于请求签名身份                                     |
 | `API_V3_KEY`                  | 商户 API V3 密钥，32 字节                                                 |
-| `WECHAT_PAY_PRIVATE_KEY_PATH` | 可选；商户 `apiclient_key.pem` 的绝对路径，设置后优先于 `getPrivateKey()` |
-| `NOTIFY_URL`                  | `https://你的API域名/api/notify/wxPay`                                    |
+| `PAY_URL` | 必填；`https://api.mch.weixin.qq.com/v3/pay/transactions/jsapi` |
+| `WECHATPAY_PUBLIC_KEY_ID` | 必填；微信支付公钥 ID，不是商户 API 证书序列号 |
+| `WECHATPAY_PUBLIC_KEY` | 必填；对应的微信支付公钥 PEM，可用字面量 `\n` 表示换行 |
+| `NOTIFY_URL`                  | `https://你的API域名/api/notify`；兼容旧 `/api/notify/wxPay` |
 | `REFUND_NOTIFY_URL`           | `https://你的API域名/api/notify/wxRefund`                                 |
 
-商户私钥 PEM 文件由部署系统保管，不提交仓库。反向代理应允许这两个回调地址公网 POST，不添加登录或验证码。更换密钥后重启服务。
+商户私钥仅由使用者在 getPrivateKey() 中本地补充，不提交仓库。反向代理应允许通知地址公网 POST，不添加登录或验证码，并保留原始请求体及 Wechatpay 请求头。更换密钥后重启服务。
 
 本次迁移 `20261103000000_wechat_payment` 增加订单操作租约、支付人快照，并允许退款的管理员 ID 为空。部署前先检查目标数据库及全部待执行迁移（仓库还包含之前的用户资料、多商品订单迁移），然后执行：
 
@@ -52,7 +54,7 @@ pnpm run build
 
 身份、价格、库存、优惠券由服务端校验；请求不明确时继续使用原 `requestKey`。新建支付与继续支付共用稳定的 32 位商户交易号。新支付记录先持久化，微信超时后先查单再使用原号重试。已付款或不可支付订单返回 409，客户端应重新读取订单。`/api/user/me` 返回当前用户 `openId`。
 
-回调无需用户 token，按 jel 的方式使用 API V3 Key 进行 AES-256-GCM 认证解密。支付回调还核对 AppID、商户号、金额、付款人和微信交易号。退款通知不含 currency 字段，按原人民币支付记录核对金额；退款查询响应必须为 CNY。成功落库后返回 HTTP 204 空响应，失败返回非 2xx `{ code: 'FAIL', message }`，不套业务响应包装。
+回调无需用户 token，由 `notify/notify.controller.ts` 调用 NotifyService.wxNotify。先校验原始请求体的 RSA-SHA256 签名、时间与微信公钥 ID，再用 API V3 Key 进行 AES-256-GCM 解密；微信接口响应同样验签。支付回调核对 AppID、商户号、订单应付金额、付款人和微信交易号。退款通知不含 currency 字段，按原人民币支付记录核对金额；退款查询响应必须为 CNY。成功落库后返回 HTTP 204 空响应，失败返回非 2xx `{ code: 'FAIL', message }`，不套业务响应包装。
 
 ## 状态和一致性
 

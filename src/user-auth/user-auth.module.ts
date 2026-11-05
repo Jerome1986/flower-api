@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common'
+import { InvitationModule } from '../invitation/invitation.module'
 import { AdminModule } from '../admin/admin.module'
 import { UserAuthController } from './user-auth.controller'
 import { UserAuthGuard } from './user-auth.guard'
@@ -8,7 +9,7 @@ import { WxUtil } from '../utils/wx.util'
 
 // 用户身份模块依赖注册。
 @Module({
-  imports: [AdminModule],
+  imports: [AdminModule, InvitationModule],
   controllers: [UserAuthController],
   providers: [UserAuthRepository, UserAuthService, UserAuthGuard, WxUtil],
   exports: [UserAuthService, UserAuthGuard, AdminModule],

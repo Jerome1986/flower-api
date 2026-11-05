@@ -2,6 +2,7 @@ jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }))
 import { Prisma } from '@prisma/client'
 import { OrdersRepository } from '../orders/orders.repository'
 import { PaymentService } from './payment.service'
+import { PaymentRepository } from './payment.repository'
 import { WxApiError } from './wechat-pay.client'
 
 function fixture() {
@@ -223,11 +224,29 @@ function fixture() {
       packageValue: 'prepay_id=prepay',
     })),
   }
-  const service = new PaymentService(db, wx, new OrdersRepository(db))
+  const service = new PaymentService(db, wx, new OrdersRepository(db), new PaymentRepository(wx))
   return { state, db, wx, service, transaction, refundResult }
 }
 
 describe('支付、取消、退款状态一致性', () => {
+  test('定制收款后才进入待派单，重复通知不降级已派单状态', async () => {
+    const f = fixture()
+    f.state.order[0].type = 'CUSTOM'
+    await f.service.paid(f.transaction())
+    expect(f.state.order[0]).toMatchObject({ status: 'PENDING_DISPATCH', paymentStatus: 'PAID' })
+    f.state.order[0].status = 'DISPATCHED'
+    await f.service.paid(f.transaction())
+    expect(f.state.order[0].status).toBe('DISPATCHED')
+    expect(f.state.couponEvent).toHaveLength(1)
+  })
+  test('未付款定制关闭无需库存预留，返还锁券', async () => {
+    const f = fixture()
+    f.state.order[0].type = 'CUSTOM'
+    f.state.inventoryLog = []
+    await f.service.cancel(2, f.state.order[0].orderNo)
+    expect(f.state.order[0].status).toBe('CANCELLED')
+    expect(f.state.userCoupon[0].status).toBe('AVAILABLE')
+  })
   test('并发重复成功通知只核销一次券和写入一次支付日志', async () => {
     const f = fixture()
     await Promise.all([

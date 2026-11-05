@@ -1,4 +1,4 @@
-import { createCipheriv, generateKeyPairSync } from 'node:crypto'
+import { createCipheriv, generateKeyPairSync, sign } from 'node:crypto'
 import axios from 'axios'
 import * as merchantKey from '../utils/wechat-pay'
 import { WechatPayClient } from './wechat-pay.client'
@@ -13,6 +13,9 @@ describe('jel 支付配置兼容', () => {
       MCH_ID: 'merchant',
       SERIALNO: 'serial',
       API_V3_KEY: 'a'.repeat(32),
+      PAY_URL: 'https://api.mch.weixin.qq.com/v3/pay/transactions/jsapi',
+      WECHATPAY_PUBLIC_KEY_ID: 'key-id',
+      WECHATPAY_PUBLIC_KEY: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
     }
     jest
       .spyOn(merchantKey, 'getPrivateKey')
@@ -25,7 +28,7 @@ describe('jel 支付配置兼容', () => {
     jest.restoreAllMocks()
   })
 
-  test('基础配置不再要求公钥和退款通知地址', () => {
+  test('支付配置和退款地址独立校验，公钥必须为微信验签公钥', () => {
     const cfg = new WechatPayClient().config()
     expect(cfg.privateKey.type).toBe('private')
     process.env.NOTIFY_URL = 'https://flower.example/api/notify/wxPay'
@@ -44,12 +47,16 @@ describe('jel 支付配置兼容', () => {
     process.env.API_V3_KEY = 'invalid'
     expect(() => new WechatPayClient().config()).toThrow('支付密钥配置无效')
   })
-  test('发送商户签名且不依赖微信公钥编号', async () => {
+  test('发送商户签名并验证微信响应', async () => {
     const request = axios.request as jest.Mock
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const nonce = 'nonce'
+    const body = '{"prepay_id":"test"}'
     request.mockResolvedValue({
       status: 200,
-      data: '{"prepay_id":"test"}',
-      headers: {},
+      data: body,
+      headers: { 'wechatpay-timestamp': timestamp, 'wechatpay-nonce': nonce, 'wechatpay-serial': 'key-id',
+        'wechatpay-signature': sign('RSA-SHA256', Buffer.from(`${timestamp}\n${nonce}\n${body}\n`), keys.privateKey).toString('base64') },
     })
     const client = new WechatPayClient()
     await expect(
@@ -61,6 +68,12 @@ describe('jel 支付配置兼容', () => {
     expect(request.mock.calls.at(-1)[0].headers).not.toHaveProperty(
       'Wechatpay-Serial',
     )
+  })
+  test('私钥唯一留空点有明确提示，缺少公钥与错误下单地址拒绝', () => {
+    jest.spyOn(merchantKey, 'getPrivateKey').mockReturnValue('')
+    expect(() => new WechatPayClient().config()).toThrow('getPrivateKey()')
+    delete process.env.WECHATPAY_PUBLIC_KEY
+    expect(() => new WechatPayClient().config()).toThrow('WECHATPAY_PUBLIC_KEY')
   })
   test('兼容通知必须通过 AES-GCM 认证解密，篡改密文和事件类型均拒绝', () => {
     const cipher = createCipheriv(

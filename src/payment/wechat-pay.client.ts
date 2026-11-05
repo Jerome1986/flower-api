@@ -6,13 +6,14 @@ import {
 } from '@nestjs/common'
 import axios from 'axios'
 import {
-  createDecipheriv,
   createPrivateKey,
+  createPublicKey,
   randomBytes,
-  sign,
+  verify,
 } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { getPrivateKey } from '../utils/wechat-pay'
+import { createWechatPay, getPrivateKey } from '../utils/wechat-pay'
+import { WechatSign } from '../utils/wechat-sign'
+import { decryptWechatData } from '../utils/decryptWechatData'
 
 // 微信支付交易结果字段。
 export interface WxTransaction {
@@ -89,7 +90,14 @@ export class WechatPayClient {
   // 读取并校验微信支付环境配置。
   private readConfig() {
     // 与 jel 一致：商户签名及 API V3 解密配置为基础必填项。
-    const names = ['APPID', 'MCH_ID', 'SERIALNO', 'API_V3_KEY'] as const
+    const names = [
+      'APPID',
+      'MCH_ID',
+      'SERIALNO',
+      'API_V3_KEY',
+      'WECHATPAY_PUBLIC_KEY_ID',
+      'WECHATPAY_PUBLIC_KEY',
+    ] as const
     const missing: string[] = names.filter((name) => !process.env[name]?.trim())
     if (missing.length)
       throw new ServiceUnavailableException(
@@ -113,12 +121,22 @@ export class WechatPayClient {
     }
     try {
       if (Buffer.byteLength(env.API_V3_KEY) !== 32) throw new Error()
-      const privateKeyPath = process.env.WECHAT_PAY_PRIVATE_KEY_PATH?.trim()
+      createPublicKey(env.WECHATPAY_PUBLIC_KEY.replace(/\\n/g, '\n'))
+      if (!getPrivateKey().trim())
+        throw new ServiceUnavailableException('请补充 getPrivateKey() 商户私钥')
       return {
         ...env,
-        privateKey: createPrivateKey(
-          privateKeyPath ? readFileSync(privateKeyPath) : getPrivateKey(),
-        ),
+        privateKey: createPrivateKey(getPrivateKey()),
+        get PAY_URL() {
+          const value = process.env.PAY_URL?.trim()
+          if (
+            value !== 'https://api.mch.weixin.qq.com/v3/pay/transactions/jsapi'
+          )
+            throw new ServiceUnavailableException(
+              'PAY_URL 必须为微信直连商户 JSAPI 下单地址',
+            )
+          return value
+        },
         get NOTIFY_URL() {
           return notifyUrl('NOTIFY_URL')
         },
@@ -126,7 +144,8 @@ export class WechatPayClient {
           return notifyUrl('REFUND_NOTIFY_URL')
         },
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException) throw error
       throw new ServiceUnavailableException(
         '支付密钥配置无效，请核对商户私钥及 API V3 密钥',
       )
@@ -136,6 +155,47 @@ export class WechatPayClient {
   config() {
     // 1. 返回本次处理结果。
     return (this.cached ??= this.readConfig())
+  }
+  // 原始通知与微信响应共用公钥验签，禁止以解密成功替代身份验证。
+  verifyMessage(
+    raw: Buffer | string | undefined,
+    headers: Record<string, unknown>,
+  ) {
+    const timestamp = headers['wechatpay-timestamp']
+    const nonce = headers['wechatpay-nonce']
+    const signature = headers['wechatpay-signature']
+    const serial = headers['wechatpay-serial']
+    const publicKeyId = process.env.WECHATPAY_PUBLIC_KEY_ID?.trim()
+    const publicKey = process.env.WECHATPAY_PUBLIC_KEY?.replace(/\\n/g, '\n')
+    if (!publicKeyId || !publicKey)
+      throw new ServiceUnavailableException(
+        '请配置 WECHATPAY_PUBLIC_KEY_ID 和 WECHATPAY_PUBLIC_KEY',
+      )
+    try {
+      if (
+        raw === undefined ||
+        typeof timestamp !== 'string' ||
+        !/^\d{10}$/.test(timestamp) ||
+        Math.abs(Date.now() / 1000 - Number(timestamp)) > 300 ||
+        typeof nonce !== 'string' ||
+        !nonce ||
+        typeof signature !== 'string' ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(signature) ||
+        serial !== publicKeyId
+      )
+        throw new Error()
+      if (
+        !verify(
+          'RSA-SHA256',
+          Buffer.from(`${timestamp}\n${nonce}\n${raw.toString()}\n`),
+          createPublicKey(publicKey),
+          Buffer.from(signature, 'base64'),
+        )
+      )
+        throw new Error()
+    } catch {
+      throw new UnauthorizedException('微信支付签名验证失败')
+    }
   }
   // 解密微信支付回调。
   notification<T>(
@@ -161,24 +221,7 @@ export class WechatPayClient {
         throw new Error()
       // 回调中的加密资源、Base64 解码后的密文和认证标签。
       // 3. 提取密文、认证标签及附加认证数据。
-      const resource = event.resource,
-        data = Buffer.from(resource.ciphertext, 'base64')
-      // 回调报文解密器。
-      const decipher = createDecipheriv(
-        'aes-256-gcm',
-        Buffer.from(this.config().API_V3_KEY),
-        resource.nonce,
-      )
-      decipher.setAuthTag(data.subarray(-16))
-      decipher.setAAD(Buffer.from(resource.associated_data ?? ''))
-      // 本次处理结果。
-      // 4. 解密并解析业务报文。
-      const result = JSON.parse(
-        Buffer.concat([
-          decipher.update(data.subarray(0, -16)),
-          decipher.final(),
-        ]).toString('utf8'),
-      )
+      const result = decryptWechatData(event.resource, this.config().API_V3_KEY)
       // 5. 确认退款事件与解密后的退款状态一致。
       if (
         eventType === 'REFUND.' &&
@@ -206,34 +249,43 @@ export class WechatPayClient {
     // 参与签名的原始请求体。
     const body = data === undefined ? '' : JSON.stringify(data)
     // 2. 按请求方法、路径和原始请求体生成签名。
-    const signature = sign(
-      'RSA-SHA256',
-      Buffer.from(`${method}\n${path}\n${timestamp}\n${nonce}\n${body}\n`),
-      cfg.privateKey,
-    ).toString('base64')
+    const signature = new WechatSign(cfg.privateKey).signRequest(
+      method,
+      path,
+      timestamp,
+      nonce,
+      body,
+    )
+    const auth = `WECHATPAY2-SHA256-RSA2048 mchid="${cfg.MCH_ID}",nonce_str="${nonce}",timestamp="${timestamp}",serial_no="${cfg.SERIALNO}",signature="${signature}"`
     // 微信接口原始响应。
     let response
     try {
       // 3. 发送带签名的请求，限制超时且禁止重定向。
-      response = await axios.request<string>({
-        method,
-        url: `https://api.mch.weixin.qq.com${path}`,
-        data: body || undefined,
-        timeout: 10000,
-        signal: AbortSignal.timeout(10000),
-        maxRedirects: 0,
-        responseType: 'text',
-        transformResponse: [(v) => v],
-        validateStatus: () => true,
-        headers: {
-          Authorization: `WECHATPAY2-SHA256-RSA2048 mchid="${cfg.MCH_ID}",nonce_str="${nonce}",timestamp="${timestamp}",serial_no="${cfg.SERIALNO}",signature="${signature}"`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-      })
+      response =
+        method === 'POST' && path === '/v3/pay/transactions/jsapi'
+          ? (cfg.PAY_URL, await createWechatPay(body, auth))
+          : await axios.request<string>({
+              method,
+              url: `https://api.mch.weixin.qq.com${path}`,
+              data: body || undefined,
+              timeout: 10000,
+              signal: AbortSignal.timeout(10000),
+              maxRedirects: 0,
+              proxy: false,
+              responseType: 'text',
+              transformResponse: [(v) => v],
+              validateStatus: () => true,
+              headers: {
+                Authorization: auth,
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+              },
+            })
     } catch {
       throw new BadGatewayException('微信支付请求结果未确认，请重试查询')
     }
+    // 先验签再解析；微信无签名的错误响应不作为可信业务状态。
+    this.verifyMessage(response.data, response.headers)
     // 本次处理结果。
     let result: any
     try {
@@ -300,13 +352,12 @@ export class WechatPayClient {
       nonceStr,
       packageValue,
       signType: 'RSA' as const,
-      paySign: sign(
-        'RSA-SHA256',
-        Buffer.from(
-          `${cfg.APPID}\n${timeStamp}\n${nonceStr}\n${packageValue}\n`,
-        ),
-        cfg.privateKey,
-      ).toString('base64'),
+      paySign: new WechatSign(cfg.privateKey).signClient(
+        cfg.APPID,
+        timeStamp,
+        nonceStr,
+        packageValue,
+      ),
     }
   }
 }

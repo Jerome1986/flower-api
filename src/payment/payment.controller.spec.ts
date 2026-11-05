@@ -1,6 +1,6 @@
 jest.mock('../prisma/prisma.service', () => ({ PrismaService: class {} }))
 jest.mock('@nestjs/jwt', () => ({ JwtService: class {} }))
-import { INestApplication, ValidationPipe } from '@nestjs/common'
+import { INestApplication, ValidationPipe, UnauthorizedException } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
 import request from 'supertest'
@@ -13,6 +13,7 @@ import {
   PaymentNotifyController,
 } from './payment.controller'
 import { PaymentService } from './payment.service'
+import { NotifyService } from '../notify/notify.service'
 import { WechatPayClient } from './wechat-pay.client'
 
 describe('前端支付接口与回调 HTTP 协议', () => {
@@ -24,7 +25,7 @@ describe('前端支付接口与回调 HTTP 协议', () => {
     paid: jest.fn(),
     refunded: jest.fn(),
   }
-  const wx = { notification: jest.fn(), config: () => ({ MCH_ID: 'merchant' }) }
+  const wx = { verifyMessage: jest.fn(), notification: jest.fn(), config: () => ({ MCH_ID: 'merchant' }) }
   const input = {
     storeId: 2,
     method: 'pickup',
@@ -39,6 +40,7 @@ describe('前端支付接口与回调 HTTP 协议', () => {
     const module = await Test.createTestingModule({
       controllers: [PaymentController, PaymentNotifyController],
       providers: [
+        NotifyService,
         { provide: OrdersService, useValue: orders },
         { provide: PaymentService, useValue: payments },
         { provide: WechatPayClient, useValue: wx },
@@ -57,7 +59,7 @@ describe('前端支付接口与回调 HTTP 协议', () => {
         },
       })
       .compile()
-    app = module.createNestApplication()
+    app = module.createNestApplication({ rawBody: true })
     app.setGlobalPrefix('api')
     app.useGlobalPipes(
       new ValidationPipe({
@@ -154,6 +156,7 @@ describe('前端支付接口与回调 HTTP 协议', () => {
       .expect(204)
     expect(result.text).toBe('')
     expect(wx.notification).toHaveBeenCalledWith(body, 'TRANSACTION.SUCCESS')
+    expect(wx.verifyMessage).toHaveBeenCalledWith(Buffer.from(JSON.stringify(body)), expect.anything())
     payments.paid.mockRejectedValueOnce(new Error('database unavailable'))
     const failed = await request(app.getHttpServer())
       .post('/api/notify/wxPay')
@@ -163,5 +166,13 @@ describe('前端支付接口与回调 HTTP 协议', () => {
       code: 'FAIL',
       message: '通知处理失败，请重试',
     })
+  })
+  test('标准通知路径可达，验签失败不会进入解密和入账', async () => {
+    await request(app.getHttpServer()).post('/api/notify').send({}).expect(204)
+    jest.clearAllMocks()
+    wx.verifyMessage.mockImplementationOnce(() => { throw new UnauthorizedException('签名错误') })
+    await request(app.getHttpServer()).post('/api/notify').send({}).expect(401)
+    expect(wx.notification).not.toHaveBeenCalled()
+    expect(payments.paid).not.toHaveBeenCalled()
   })
 })

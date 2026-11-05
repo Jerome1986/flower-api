@@ -587,7 +587,7 @@ export class OrdersService {
     // 3. 不满足要求时提示：订单不存在。
     if (!selected) throw new NotFoundException('订单不存在')
     // 4. 满足条件时提前结束本次处理。
-    if (selected.type === 'ORDINARY' && cents(selected.payableAmount) > 0)
+    if (cents(selected.payableAmount) > 0 && selected.paymentStatus !== 'NOT_REQUIRED')
       return this.serialize(
         await this.payments.cancel(userId, orderNo, expired, operator),
       )

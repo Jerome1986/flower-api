@@ -28,6 +28,19 @@ export class BouquetsRepository {
     private readonly prisma: PrismaService,
   ) {}
 
+  // 查询券快照，归属和适用性由业务层复核。
+  findCoupon(id: number, tx?: Prisma.TransactionClient) {
+    return (tx ?? this.prisma).userCoupon.findUnique({ where: { id } })
+  }
+
+  // 只返回本人当前可使用的券，具体规格继续由报价规则筛选。
+  findAvailableCoupons(userId: number) {
+    return this.prisma.userCoupon.findMany({
+      where: { userId, status: 'AVAILABLE', currentOrderId: null, expiresAt: { gt: new Date() } },
+      orderBy: [{ expiresAt: 'asc' }, { id: 'asc' }],
+    })
+  }
+
   // 读取平台单例配置。
   findConfig(
     // 当前数据库事务。

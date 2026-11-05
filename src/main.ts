@@ -6,7 +6,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 // 初始化应用，注册全局前缀、校验和响应拦截器并启动监听。
 async function bootstrap() {
   // Nest 应用实例。
-  const app = await NestFactory.create(AppModule)
+  const app = await NestFactory.create(AppModule, { rawBody: true })
   // ✅ 开启 CORS，解决所有跨域（最简单版）
   app.enableCors()
   app.setGlobalPrefix('api')

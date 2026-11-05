@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common'
 import { JwtService } from '@nestjs/jwt'
+import { InvitationService } from '../invitation/invitation.service'
 import { WxUtil } from '../utils/wx.util'
 import { WxPhoneLoginDto } from './dto/wx-phone-login.dto'
 import { testPhones } from './user-auth.constants'
@@ -26,6 +27,8 @@ export class UserAuthService {
     private readonly wxUtil: WxUtil,
     // 数据库访问服务。
     private readonly prisma: PrismaService,
+    // 好友首次注册奖励服务。
+    private readonly invitation: InvitationService,
   ) {}
 
   // 校验测试登录资格并签发用户令牌。
@@ -91,6 +94,7 @@ export class UserAuthService {
             },
             tx,
           )
+          await this.invitation.rewardRegistration(created.id, tx)
           return created
         },
       )

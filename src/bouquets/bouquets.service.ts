@@ -8,6 +8,9 @@ import {
 } from '@nestjs/common'
 import { Prisma, type OrderStatus } from '@prisma/client'
 import { randomUUID } from 'node:crypto'
+import { allocateCoupon } from '../orders/order-lines'
+import { consumeCoupon, lockCoupon, returnCoupon } from '../orders/order-coupons'
+import { PaymentService } from '../payment/payment.service'
 import type { CurrentAdmin } from '../common/guards/admin-auth.guard'
 import { OrdersService } from '../orders/orders.service'
 import { UserAuthService } from '../user-auth/user-auth.service'
@@ -41,6 +44,7 @@ export class BouquetsService {
     private readonly orders: OrdersService,
     // 数据库访问服务。
     private readonly prisma: PrismaService,
+    private readonly payments: PaymentService,
   ) {}
 
   // 校验当前账号的定制花束访问权限。
@@ -129,6 +133,8 @@ export class BouquetsService {
 
   // 校验配送地址、定制服务与花束规格，计算下单金额。
   private async selection(
+    // 当前登录用户编号。
+    userId: number,
     // 接口请求参数。
     dto: QuoteBouquetDto,
     // 当前数据库事务。
@@ -154,12 +160,17 @@ export class BouquetsService {
     // 9. 不满足要求时提示：订单金额超过限制。
     if (!Number.isSafeInteger(payableAmount) || payableAmount > 999999999)
       throw new BadRequestException('订单金额超过限制，请减少数量')
-    // 10. 返回本次处理结果。
+    const coupon = dto.couponId ? await this.repo.findCoupon(dto.couponId, tx) : null
+    if (dto.couponId && !coupon) throw new ConflictException('优惠券不存在')
+    const discount = allocateCoupon(coupon, userId, [{ specId: spec.id, quantity: dto.quantity, unitPrice: cents(spec.price) }])
+    // 10. 优惠只抵商品金额，配送费保留原价。
     return {
       config,
       product,
       spec,
-      quote: { productAmount, deliveryFee, discountAmount: 0, payableAmount },
+      coupon,
+      exchangeQuantity: discount.exchanges[0],
+      quote: { productAmount, deliveryFee, discountAmount: discount.discountAmount, payableAmount: payableAmount - discount.discountAmount },
     }
   }
 
@@ -173,7 +184,23 @@ export class BouquetsService {
     // 1. 校验用户状态并返回当前资料。
     await this.users.currentUser(userId)
     // 2. 返回本次处理结果。
-    return (await this.selection(dto)).quote
+    return (await this.selection(userId, dto)).quote
+  }
+
+  // 筛选当前用户适用于所选定制规格和数量的优惠券。
+  async availableCoupons(userId: number, dto: QuoteBouquetDto) {
+    await this.users.currentUser(userId)
+    const { spec } = await this.selection(userId, { ...dto, couponId: undefined })
+    const coupons = await this.repo.findAvailableCoupons(userId)
+    return coupons.filter((coupon) => {
+      try {
+        allocateCoupon(coupon, userId, [{ specId: spec.id, quantity: dto.quantity, unitPrice: cents(spec.price) }])
+        return true
+      } catch (error) {
+        if (error instanceof ConflictException) return false
+        throw error
+      }
+    })
   }
 
   // 检查重复下单请求是否与原订单一致。
@@ -188,6 +215,7 @@ export class BouquetsService {
       order.type !== 'CUSTOM' ||
       order.storeId !== null ||
       order.method !== 'DELIVERY' ||
+      (order.couponId ?? null) !== (dto.couponId ?? null) ||
       (order.serviceSnapshot as Prisma.JsonObject)?.productId !==
         dto.bouquetId ||
       order.items[0]?.specId !== dto.specId ||
@@ -225,7 +253,7 @@ export class BouquetsService {
           )
           if (prior) return this.same(prior, dto)
           // 3. 在事务内重新报价，拒绝价格或配送费已变化的请求。
-          const { config, product, spec, quote } = await this.selection(dto, tx)
+          const { config, product, spec, quote, coupon, exchangeQuantity } = await this.selection(userId, dto, tx)
           if (dto.expectedAmount !== quote.payableAmount)
             throw new ConflictException('价格或配送费已变化，请重新报价')
           // 4. 保存商品、配送配置和联系人快照，供后续派单和履约使用。
@@ -237,9 +265,10 @@ export class BouquetsService {
               type: 'CUSTOM',
               storeId: null,
               method: 'DELIVERY',
-              // 与现有普通订单相同的测试下单模式；没有收款，也不标记 PAID。
-              status: 'PENDING_DISPATCH',
-              paymentStatus: 'NOT_REQUIRED',
+              // 非零订单收款后才允许派单；零元订单直接进入待派单。
+              status: quote.payableAmount > 0 ? 'PENDING_PAYMENT' : 'PENDING_DISPATCH',
+              paymentStatus: quote.payableAmount > 0 ? 'PENDING' : 'NOT_REQUIRED',
+              ...(quote.payableAmount === 0 ? { confirmedAt: new Date() } : {}),
               expiresAt: new Date(Date.now() + 30 * 60 * 1000),
               contactName: dto.contactName.trim(),
               contactPhone: dto.contactPhone,
@@ -252,6 +281,16 @@ export class BouquetsService {
                 businessHours: config.businessHours,
               },
               productAmount: quote.productAmount / 100,
+              discountAmount: quote.discountAmount / 100,
+              ...(coupon ? {
+                couponId: coupon.id,
+                couponSnapshot: {
+                  id: coupon.id, name: coupon.name, type: coupon.type, scope: coupon.scope,
+                  cashAmount: coupon.cashAmount?.toString() ?? null,
+                  exchangeSpecId: coupon.exchangeSpecId, exchangeQuantity: coupon.exchangeQuantity,
+                  activityId: coupon.activityId, activityName: coupon.activityName, isFlowerGift: coupon.isFlowerGift,
+                },
+              } : {}),
               deliveryFee: quote.deliveryFee / 100,
               payableAmount: quote.payableAmount / 100,
               items: {
@@ -265,6 +304,13 @@ export class BouquetsService {
                   quantity: dto.quantity,
                   stemsPerUnit: spec.stemsPerUnit,
                   productAmount: quote.productAmount / 100,
+                  discountAmount: quote.discountAmount / 100,
+                  exchangeQuantity,
+                  giftQuantity: coupon?.isFlowerGift ? exchangeQuantity : 0,
+                  giftStems: coupon?.isFlowerGift && spec.stemsPerUnit != null ? exchangeQuantity * spec.stemsPerUnit : null,
+                  reimbursementPerUnit: coupon?.isFlowerGift ? coupon.reimbursementPerUnit : null,
+                  reimbursementAmount: coupon?.isFlowerGift && exchangeQuantity && coupon.reimbursementPerUnit != null
+                    ? coupon.reimbursementPerUnit.mul(exchangeQuantity) : null,
                 },
               },
               logs: {
@@ -272,15 +318,20 @@ export class BouquetsService {
                   actorType: 'USER',
                   actorId: userId,
                   action: 'CREATE',
-                  toStatus: 'PENDING_DISPATCH',
-                  toPaymentStatus: 'NOT_REQUIRED',
+                  toStatus: quote.payableAmount > 0 ? 'PENDING_PAYMENT' : 'PENDING_DISPATCH',
+                  toPaymentStatus: quote.payableAmount > 0 ? 'PENDING' : 'NOT_REQUIRED',
                   operationKey: `create:${userId}:${dto.requestKey}`,
-                  remark: '测试订单已创建，等待平台派单；支付待接入',
+                  remark: quote.payableAmount > 0 ? '定制订单等待微信支付' : '零元定制订单等待派单',
                 },
               },
             },
             tx,
           )
+          // 非零订单先锁券，支付确认再核销；零元订单直接核销。
+          if (coupon) {
+            if (quote.payableAmount > 0) await lockCoupon(tx, coupon, userId, order.id)
+            else await consumeCoupon(tx, coupon, userId, order.id, '零元定制订单确认用券')
+          }
           return this.orders.serialize(order)
         },
       )
@@ -388,6 +439,15 @@ export class BouquetsService {
   ) {
     // 1. 校验当前账号的定制花束访问权限。
     this.authorize(admin)
+    // 非零定制取消复用现有查单、关单与退款流程，网络调用在事务外。
+    if (dto.action === 'cancel') {
+      const order = await this.repo.findOrderDetail(orderNo)
+      if (!order) throw new NotFoundException('定制订单不存在')
+      if (cents(order.payableAmount) > 0 && order.paymentStatus !== 'NOT_REQUIRED') {
+        await this.payments.cancel(order.userId, orderNo, false, { ...admin, version: dto.version })
+        return this.manageDetail(orderNo, admin)
+      }
+    }
     // 2. 在事务中完成相关查询或更新。
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 当前订单信息。
@@ -447,6 +507,8 @@ export class BouquetsService {
         tx,
       )
       if (result.count !== 1) throw new ConflictException('订单已变化，请刷新')
+      if (dto.action === 'cancel' && order.couponId)
+        await returnCoupon(tx, order.couponId, order.userId, order.id)
       // 业务操作幂等键。
       const operationKey = `custom:${order.id}:${dto.version}:${dto.action}`
       if (dto.action === 'dispatch')

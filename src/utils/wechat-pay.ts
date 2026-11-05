@@ -1,6 +1,7 @@
-// 获取商户签名私钥，沿用 jel 的 PEM 返回方式。
-export function getPrivateKey(): string {
-  // 1. 返回商户私钥，供微信请求和小程序支付参数签名。
+import axios from 'axios'
+
+// 商户私钥由使用者本地填写，禁止提交真实私钥。
+export function getPrivateKey() {
   return `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC1zyUo+zudRaPA
 DnyzqFrPAuSaOfq5JF1u0fjGqghyRKqqTGy9uq8+JKU/iKmsQl74K7+S44nb8XAg
@@ -29,4 +30,24 @@ aGwG/3tFUag1qVzwIwoCGkP3AaNZynnLkmL3cKR6sY4yXjYxr9/OBQ2k+MiLuP6e
 kH3U5QMEQIVBNVNACLlxo+joBAmO8nSQpjlAaOriCWxRaO4PEYMhMwr9Vm2v9NQH
 7Y4TZu6D6JBQYNcHhjvP9EE=
 -----END PRIVATE KEY-----`
+}
+
+// 保持签名报文和发送报文一致，禁止代理与重定向。
+export const createWechatPay = (body: string, auth: string) => {
+  return axios.request<string>({
+    method: 'POST',
+    url: process.env.PAY_URL,
+    data: body,
+    timeout: 10000,
+    proxy: false,
+    maxRedirects: 0,
+    responseType: 'text',
+    transformResponse: [(value) => value],
+    validateStatus: () => true,
+    headers: {
+      Authorization: auth,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  })
 }

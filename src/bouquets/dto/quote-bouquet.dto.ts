@@ -1,5 +1,6 @@
 import {
   IsInt,
+  IsOptional,
   IsString,
   Max,
   MaxLength,
@@ -9,6 +10,13 @@ import {
 
 // 定制花束请求参数及校验规则。
 export class QuoteBouquetDto {
+  // 本次选择的用户优惠券，不传表示不用券。
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  couponId?: number
+
   // 定制花束商品编号。
   @IsInt()
   @Min(1)

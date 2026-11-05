@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { PrismaService } from '../prisma/prisma.service'
 import { OrdersRepository } from '../orders/orders.repository'
 import { returnCoupon } from '../orders/order-coupons'
+import { PaymentRepository } from './payment.repository'
 import {
   WechatPayClient,
   WxApiError,
@@ -46,11 +47,15 @@ export class PaymentService {
     private readonly wx: WechatPayClient,
     // 业务数据访问层。
     private readonly repo: OrdersRepository,
+    private readonly paymentRepo: PaymentRepository,
   ) {}
   // 确认微信支付配置完整可用。
   assertConfigured() {
     // 1. 读取缓存中的微信支付配置。
-    this.wx.config()
+    const cfg = this.wx.config()
+    // 创建待支付订单前检查下单端点和支付通知地址。
+    void cfg.PAY_URL
+    void cfg.NOTIFY_URL
   }
   // 获取订单操作租约并在处理后释放。
   private async locked<T>(
@@ -108,7 +113,7 @@ export class PaymentService {
         where: { id: selected.id },
       })
       if (
-        order.type !== 'ORDINARY' ||
+        !['ORDINARY', 'CUSTOM'].includes(order.type) ||
         order.status !== 'PENDING_PAYMENT' ||
         order.paymentStatus !== 'PENDING' ||
         order.expiresAt <= new Date() ||
@@ -174,24 +179,14 @@ export class PaymentService {
         if (!active)
           throw new ConflictException('支付操作已过期，请重新查询订单')
         // 微信支付配置。
-        const cfg = this.wx.config()
-        // 微信接口原始响应。
-        const response = await this.wx.request<{
-          // 微信预支付会话标识。
-          prepay_id: string
-        }>('POST', '/v3/pay/transactions/jsapi', {
-          appid: cfg.APPID,
-          mchid: cfg.MCH_ID,
-          description: '鲜花订单',
-          out_trade_no: outTradeNo,
-          notify_url: cfg.NOTIFY_URL,
-          time_expire: order.expiresAt.toISOString(),
-          amount: { total: cents(order.payableAmount), currency: 'CNY' },
-          payer: { openid },
-        })
-        if (!response.prepay_id)
-          throw new ConflictException('微信预支付结果未确认，请重试')
-        prepayId = response.prepay_id
+        const response = await this.paymentRepo.wxPay(
+          '鲜花订单',
+          outTradeNo,
+          openid,
+          order.payableAmount,
+          order.expiresAt,
+        )
+        prepayId = response.prepayId
         await this.db.payment.update({
           where: { id: payment.id },
           data: { prepayId },
@@ -259,6 +254,8 @@ export class PaymentService {
         where: { id: payment.orderId },
       })
       if (
+        !['ORDINARY', 'CUSTOM'].includes(order.type) ||
+        cents(order.payableAmount) !== result.amount.total ||
         !['PENDING_PAYMENT', 'CANCELLING'].includes(order.status) ||
         order.paymentStatus !== 'PENDING'
       )
@@ -274,7 +271,11 @@ export class PaymentService {
         data: {
           paymentStatus: 'PAID',
           status:
-            order.status === 'CANCELLING' ? 'CANCELLING' : 'PENDING_ACCEPTANCE',
+            order.status === 'CANCELLING'
+              ? 'CANCELLING'
+              : order.type === 'CUSTOM'
+                ? 'PENDING_DISPATCH'
+                : 'PENDING_ACCEPTANCE',
           confirmedAt: new Date(result.success_time),
           version: { increment: 1 },
         },
@@ -320,7 +321,11 @@ export class PaymentService {
           action: 'PAY',
           fromStatus: order.status,
           toStatus:
-            order.status === 'CANCELLING' ? 'CANCELLING' : 'PENDING_ACCEPTANCE',
+            order.status === 'CANCELLING'
+              ? 'CANCELLING'
+              : order.type === 'CUSTOM'
+                ? 'PENDING_DISPATCH'
+                : 'PENDING_ACCEPTANCE',
           fromPaymentStatus: 'PENDING',
           toPaymentStatus: 'PAID',
           operationKey: `paid:${order.id}`,
@@ -390,11 +395,16 @@ export class PaymentService {
         )
           throw new ConflictException('订单已变化，请刷新')
         // 允许的业务状态。
-        const allowed = expired
-          ? ['PENDING_PAYMENT']
-          : operator
-            ? ['PENDING_PAYMENT', 'PENDING_ACCEPTANCE', 'ACCEPTED', 'READY']
-            : ['PENDING_PAYMENT', 'PENDING_ACCEPTANCE']
+        const allowed =
+          order.type === 'CUSTOM' && !expired
+            ? operator
+              ? ['PENDING_PAYMENT', 'PENDING_DISPATCH', 'DISPATCHED']
+              : ['PENDING_PAYMENT', 'PENDING_DISPATCH']
+            : expired
+              ? ['PENDING_PAYMENT']
+              : operator
+                ? ['PENDING_PAYMENT', 'PENDING_ACCEPTANCE', 'ACCEPTED', 'READY']
+                : ['PENDING_PAYMENT', 'PENDING_ACCEPTANCE']
         if (
           !allowed.includes(order.status) ||
           (expired && order.expiresAt > new Date())
@@ -761,8 +771,12 @@ export class PaymentService {
     if (order.couponId)
       await returnCoupon(tx, order.couponId, order.userId, order.id)
     // 4. 按原预留流水释放库存，并记录释放流水。
-    const reservations = await this.repo.findReservations(order.id, tx)
-    if (!reservations.length) throw new ConflictException('库存预留流水缺失')
+    const reservations =
+      order.type === 'ORDINARY'
+        ? await this.repo.findReservations(order.id, tx)
+        : []
+    if (order.type === 'ORDINARY' && !reservations.length)
+      throw new ConflictException('库存预留流水缺失')
     for (const r of reservations) {
       // 商品份数、商品规格库存。
       const quantity = r.reservedAfter - r.reservedBefore,
@@ -825,7 +839,7 @@ export class PaymentService {
         const orders = await this.db.order.findMany({
           where: {
             id: { gt: cursor },
-            type: 'ORDINARY',
+            type: { in: ['ORDINARY', 'CUSTOM'] },
             OR: [
               { status: 'CANCELLING', paymentStatus: { not: 'REFUND_FAILED' } },
               {

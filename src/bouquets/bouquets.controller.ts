@@ -60,6 +60,13 @@ export class CustomOrdersController {
     private readonly service: BouquetsService,
   ) {}
 
+  // 查询所选定制花束可用的本人优惠券。
+  @Post('available-coupons')
+  @HttpCode(200)
+  availableCoupons(@Req() req: UserRequest, @Body() dto: QuoteBouquetDto) {
+    return this.service.availableCoupons(req.userId, dto)
+  }
+
   // 校验选择的商品并返回订单报价。
   @Post('quote')
   @HttpCode(200)
