@@ -30,7 +30,7 @@ export class CouponGrantService {
     tx: Prisma.TransactionClient,
   ) {
     // 1. 校验用户状态并读取已领优惠券及新人活动。
-    const user = await tx.user.findUnique({ where: { id: userId } })
+    const user = await this.repo.findUser(userId, tx)
     if (!user?.enabled)
       throw new UnauthorizedException('账号不可用，请重新登录')
     // 用户优惠券信息。

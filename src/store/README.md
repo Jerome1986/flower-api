@@ -34,8 +34,8 @@
 
 ## 验证与数据库
 
-`store.controller.spec.ts` 使用真实Nest HTTP路由、校验管道和响应拦截器，隔离模拟JWT验证与Prisma，不访问真实数据库。覆盖权限隔离、字段校验、分页筛选、金额转换、重复编号及软停用等。执行：`pnpm exec jest --runInBand store.controller.spec.ts`。
+后端现有隔离测试通过 `pnpm exec jest --runInBand` 执行；具体覆盖范围以当前测试文件为准，不引用已移除的历史测试。
 
-后台使用真实Vue页面脚本及隔离API验证列表、新增、编辑、金额转换、状态和失败恢复，执行：在 flower-admin 下运行 `node scripts/check-store-flow.cjs`。后台另需通过类型检查及构建。
+后台表单已拆为 StoreFormDialog，使用隔离验证检查新增编辑入口和配送费转换。在 flower-admin 下运行 `pnpm run check:forms`，并进行类型检查及构建。
 
-本次模型新增UserRole、User.role、Store.managerId及双向关系，并将User.openId改为可空。未执行 Prisma 同步、迁移或生成；维护者需按自己的流程同步数据库并重新生成Prisma客户端，之后才能运行新接口。不要用伪造openId替代首次微信授权绑定；将来微信登录须按已验证手机号绑定现有User，禁止重复创建用户或覆盖已有微信绑定。小程序公开门店查询与下单接口不在本次范围内。
+模型以当前 Prisma Schema 和迁移为准；清理文档不代表已执行数据库迁移。店长手机号关联与微信登录绑定仍由服务端校验，不能伪造 openId 或覆盖已有微信绑定。

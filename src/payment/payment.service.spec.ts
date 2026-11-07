@@ -224,7 +224,7 @@ function fixture() {
       packageValue: 'prepay_id=prepay',
     })),
   }
-  const service = new PaymentService(db, wx, new OrdersRepository(db), new PaymentRepository(wx))
+  const service = new PaymentService(db, wx, new OrdersRepository(db), new PaymentRepository(wx, db))
   return { state, db, wx, service, transaction, refundResult }
 }
 

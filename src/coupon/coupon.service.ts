@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common'
-import { PrismaService } from '../prisma/prisma.service'
 import { CouponRepository } from './coupon.repository'
 
 // 用户优惠券业务服务。

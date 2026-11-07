@@ -60,7 +60,7 @@ export class UserAuthService {
     // 接口请求参数。
     dto: WxPhoneLoginDto,
   ) {
-    // 业务编号或错误码、微信手机号授权凭证、邀请人邀请码。
+    // 微信登录凭证、手机号授权凭证及首次注册邀请码。
     const { code, phoneCode, inviterCode } = dto
     // 1. 获取 openId
     const { openid } = await this.wxUtil.getSession(code)

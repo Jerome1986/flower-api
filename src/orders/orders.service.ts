@@ -220,15 +220,7 @@ export class OrdersService {
     // 2. 准备待保存或处理的数据。
     const data = await this.selection(dto)
     // 3. 查询用户可选优惠券列表。
-    const coupons = await this.prisma.userCoupon.findMany({
-      where: {
-        userId,
-        status: 'AVAILABLE',
-        currentOrderId: null,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { expiresAt: 'asc' },
-    })
+    const coupons = await this.repo.findAvailableCoupons(userId)
     // 4. 返回本次处理结果。
     return coupons.filter((coupon) => {
       try {
@@ -249,6 +241,8 @@ export class OrdersService {
     order: SavedOrder,
   ) {
     // 支付协调字段仅供内部使用，不返回给客户端。
+    // 仅用于剔除租约字段，不能把内部支付锁信息返回给客户端。
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { paymentLeaseToken, paymentLeaseUntil, ...publicOrder } = order
     // 1. 准备业务明细列表。
     const items = order.items.map((item) => ({
@@ -587,7 +581,10 @@ export class OrdersService {
     // 3. 不满足要求时提示：订单不存在。
     if (!selected) throw new NotFoundException('订单不存在')
     // 4. 满足条件时提前结束本次处理。
-    if (cents(selected.payableAmount) > 0 && selected.paymentStatus !== 'NOT_REQUIRED')
+    if (
+      cents(selected.payableAmount) > 0 &&
+      selected.paymentStatus !== 'NOT_REQUIRED'
+    )
       return this.serialize(
         await this.payments.cancel(userId, orderNo, expired, operator),
       )

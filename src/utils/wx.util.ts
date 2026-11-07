@@ -1,3 +1,8 @@
+import type {
+  WechatSessionResponse,
+  WechatAccessTokenResponse,
+  WechatPhoneResponse,
+} from './wechat.types'
 import axios from 'axios'
 import {
   BadRequestException,
@@ -19,7 +24,7 @@ export class WxUtil {
     code: string,
   ) {
     // 1. 准备微信接口响应。
-    const res = await axios.get(
+    const res = await axios.get<WechatSessionResponse>(
       'https://api.weixin.qq.com/sns/jscode2session',
       {
         params: {
@@ -38,7 +43,8 @@ export class WxUtil {
     }
 
     // 3. 返回本次处理结果。
-    return res.data
+    if (!res.data.openid) throw new BadRequestException('微信未返回用户标识')
+    return { ...res.data, openid: res.data.openid }
   }
 
   // 校验微信配置并获取接口访问令牌。
@@ -49,14 +55,17 @@ export class WxUtil {
     }
 
     // 2. 准备微信接口响应。
-    const res = await axios.get('https://api.weixin.qq.com/cgi-bin/token', {
-      params: {
-        grant_type: 'client_credential',
-        appid: this.appId,
-        secret: this.secret,
+    const res = await axios.get<WechatAccessTokenResponse>(
+      'https://api.weixin.qq.com/cgi-bin/token',
+      {
+        params: {
+          grant_type: 'client_credential',
+          appid: this.appId,
+          secret: this.secret,
+        },
+        proxy: false,
       },
-      proxy: false,
-    })
+    )
 
     // 3. 根据当前条件选择处理分支。
     if (res.data.errcode) {
@@ -66,6 +75,8 @@ export class WxUtil {
     }
 
     // 4. 返回本次处理结果。
+    if (!res.data.access_token)
+      throw new BadRequestException('微信未返回访问令牌')
     return res.data.access_token
   }
 
@@ -83,7 +94,7 @@ export class WxUtil {
     const accessToken = await this.getAccessToken()
 
     // 3. 准备微信接口响应。
-    const res = await axios.post(
+    const res = await axios.post<WechatPhoneResponse>(
       `https://api.weixin.qq.com/wxa/business/getuserphonenumber?access_token=${accessToken}`,
       {
         code: phoneCode,

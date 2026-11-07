@@ -12,7 +12,7 @@
 - 全局 /api；普通成功包装 code=200/message/data；微信通知 RawResponse、成功 204，不套包装。未知 DTO 字段拒绝。
 - 用户归属取 UserAuthGuard 上下文；管理范围继续落实到 Service / Repository。店长 user 身份与旧 STORE_ADMIN 不可混用。
 - 普通订单保留多商品与旧单商品兼容、幂等、库存预留、券锁定及支付状态。数据库 Decimal 元与订单接口整数分转换需明确。
-- 定制创建当前仍为测试下单语义；不可把普通订单支付能力推广到定制链路。
+- 非零定制创建待支付订单，收款确认后才进入待派单；零元订单直接待派单。历史测试订单不自动改写。
 - 适用时加载 software-development、nestjs-development、mysql-development、api-design；审查时加载 code-review。
 
 ## 验证与边界

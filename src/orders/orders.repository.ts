@@ -7,11 +7,6 @@ export const include = {
   items: { orderBy: { id: 'asc' as const } },
   logs: { orderBy: { createdAt: 'asc' as const } },
 } satisfies Prisma.OrderInclude
-// 订单业务数据类型。
-type SavedOrder = Prisma.OrderGetPayload<{
-  // 关联查询配置。
-  include: typeof include
-}>
 // 订单数据库访问。
 @Injectable()
 export class OrdersRepository {
@@ -20,6 +15,19 @@ export class OrdersRepository {
     // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {}
+
+  // 查询当前用户未过期且未被订单占用的优惠券。
+  findAvailableCoupons(userId: number) {
+    return this.prisma.userCoupon.findMany({
+      where: {
+        userId,
+        status: 'AVAILABLE',
+        currentOrderId: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { expiresAt: 'asc' },
+    })
+  }
 
   // 查询可下单的门店商品及目标规格库存。
   findAvailableProduct(

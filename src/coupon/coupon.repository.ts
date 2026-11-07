@@ -10,6 +10,10 @@ export class CouponRepository {
     // 数据库访问服务。
     private readonly prisma: PrismaService,
   ) {}
+  // 在发券事务内读取用户当前状态和注册时间。
+  findUser(userId: number, tx: Prisma.TransactionClient) {
+    return tx.user.findUnique({ where: { id: userId } })
+  }
   // 在注册事务中读取新人活动及模板、兑换商品信息。
   findNewUserActivity(
     // 当前数据库事务。
